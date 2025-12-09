@@ -1,4 +1,4 @@
-use super::types::Transform;
+use super::{mesh::TriangleMesh, types::Transform};
 use crate::utils::allocator::EntityId;
 use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ pub enum ColliderShape {
     Cylinder { radius: f32, height: f32 },
     ConvexHull { vertices: Vec<Vec3> },
     Compound { shapes: Vec<(Transform, ColliderShape)> },
+    Mesh { mesh: TriangleMesh },
 }
 
 /// Simple collision filtering mask.
@@ -50,8 +51,38 @@ impl Collider {
         ColliderShape::Box { half_extents }
     }
 
+    pub fn mesh(vertices: Vec<Vec3>, indices: Vec<[u32; 3]>) -> ColliderShape {
+        ColliderShape::Mesh {
+            mesh: TriangleMesh::builder(vertices, indices).build(),
+        }
+    }
+
     pub fn world_transform(&self, rigidbody_transform: &Transform) -> Transform {
         rigidbody_transform.combine(&self.offset)
+    }
+
+    pub fn bounding_radius(&self) -> f32 {
+        self.shape.bounding_radius()
+    }
+}
+
+impl ColliderShape {
+    pub fn bounding_radius(&self) -> f32 {
+        match self {
+            ColliderShape::Sphere { radius } => *radius,
+            ColliderShape::Box { half_extents } => half_extents.length(),
+            ColliderShape::Capsule { radius, height } => radius + height * 0.5,
+            ColliderShape::Cylinder { radius, height } => (radius.powi(2) + (height * 0.5).powi(2)).sqrt(),
+            ColliderShape::ConvexHull { vertices } => vertices
+                .iter()
+                .map(|v| v.length())
+                .fold(0.0, f32::max),
+            ColliderShape::Compound { shapes } => shapes
+                .iter()
+                .map(|(transform, shape)| transform.position.length() + shape.bounding_radius())
+                .fold(0.0, f32::max),
+            ColliderShape::Mesh { mesh } => mesh.bounding_radius(),
+        }
     }
 }
 

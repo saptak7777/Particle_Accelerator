@@ -2,6 +2,7 @@ use particle_accelerator::*;
 
 fn main() {
     let mut engine = PhysicsEngine::new(1.0 / 60.0);
+    engine.set_parallel_enabled(true);
 
     let mut ground = RigidBody::new(EntityId::from_index(0));
     ground.is_static = true;

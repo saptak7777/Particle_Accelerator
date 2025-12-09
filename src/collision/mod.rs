@@ -10,3 +10,4 @@ pub mod ccd;
 pub use broadphase::{BroadPhase, SpatialGrid};
 pub use contact::{ContactManifold, ContactSolverInput};
 pub use queries::{Raycast, RaycastHit, RaycastQuery};
+pub use ccd::CCDDetector;

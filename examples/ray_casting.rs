@@ -17,6 +17,10 @@ fn main() {
         origin: Vec3::new(0.0, 0.0, -5.0),
         direction: Vec3::Z,
         max_distance: 10.0,
+        layer_mask: u32::MAX,
+        query_layer: 1,
+        ignore_triggers: false,
+        closest_only: true,
     };
 
     let hits = Raycast::cast(&query, &world.colliders, &world.bodies);

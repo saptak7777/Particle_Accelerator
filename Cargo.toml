@@ -1,10 +1,10 @@
 [package]
 name = "particle_accelerator"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Particle Accelerator – a modular, ECS-ready physics engine for Rust."
-repository = "https://example.com/particle_accelerator"
+repository = "https://github.com/saptak7777/Particle_Accelerator"
 authors = ["Saptak Santra"]
 
 [dependencies]

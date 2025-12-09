@@ -1,19 +1,85 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use particle_accelerator::*;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use particle_accelerator::{
+    core::mesh::TriangleMesh,
+    *,
+};
 
-fn bench_broad_phase(c: &mut Criterion) {
-    c.bench_function("broad_phase_100_bodies", |b| {
-        b.iter(|| {
-            let mut world = PhysicsWorld::new(1.0 / 60.0);
-            for i in 0..100 {
-                let mut body = RigidBody::new(EntityId::from_index(i));
-                body.transform.position = Vec3::new(i as f32 * 0.1, 0.0, 0.0);
-                world.add_rigidbody(body);
-            }
-            world.step(black_box(1.0 / 60.0));
-        })
-    });
+const DT: f32 = 1.0 / 60.0;
+
+fn prepare_world(body_count: usize) -> PhysicsEngine {
+    let mut engine = PhysicsEngine::new(DT);
+    for i in 0..body_count {
+        let mut body = RigidBody::new(EntityId::from_index(i as u32));
+        body.transform.position = Vec3::new(i as f32 * 0.1, 0.0, 0.0);
+        engine.add_body(body);
+    }
+    engine
 }
 
-criterion_group!(benches, bench_broad_phase);
+fn bench_world_step(c: &mut Criterion) {
+    let mut group = c.benchmark_group("world_step");
+    for &count in &[128usize, 512, 2048] {
+        group.bench_with_input(
+            BenchmarkId::new("sequential", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    let mut engine = prepare_world(count);
+                    engine.set_parallel_enabled(false);
+                    engine.step(black_box(DT));
+                })
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("parallel", count), &count, |b, &count| {
+            b.iter(|| {
+                let mut engine = prepare_world(count);
+                engine.set_parallel_enabled(true);
+                engine.step(black_box(DT));
+            })
+        });
+    }
+    group.finish();
+}
+
+fn generate_grid_mesh(resolution: usize) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for y in 0..=resolution {
+        for x in 0..=resolution {
+            vertices.push(Vec3::new(x as f32, 0.0, y as f32));
+        }
+    }
+    let width = resolution + 1;
+    for y in 0..resolution {
+        for x in 0..resolution {
+            let i = y * width + x;
+            let a = i as u32;
+            let b = (i + 1) as u32;
+            let c = (i + width) as u32;
+            let d = (i + width + 1) as u32;
+            indices.push([a, b, c]);
+            indices.push([b, d, c]);
+        }
+    }
+    (vertices, indices)
+}
+
+fn bench_mesh_builder(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mesh_builder");
+    for &res in &[16usize, 32, 64] {
+        group.bench_with_input(BenchmarkId::new("build", res), &res, |b, &res| {
+            let (vertices, indices) = generate_grid_mesh(res);
+            b.iter(|| {
+                let mesh = TriangleMesh::builder(vertices.clone(), indices.clone())
+                    .weld_vertices(0.001)
+                    .recenter()
+                    .build();
+                black_box(mesh)
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_world_step, bench_mesh_builder);
 criterion_main!(benches);

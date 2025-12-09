@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
@@ -175,6 +176,18 @@ impl<T> Arena<T> {
             .copied()
             .map(|gen| gen == id.generation())
             .unwrap_or(false)
+    }
+}
+
+impl<T: Send> Arena<T> {
+    pub fn par_for_each_mut<F>(&mut self, f: F)
+    where
+        F: Fn(&mut T) + Send + Sync,
+    {
+        self.items
+            .par_iter_mut()
+            .filter_map(|slot| slot.as_mut())
+            .for_each(f);
     }
 }
 

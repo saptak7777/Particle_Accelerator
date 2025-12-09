@@ -10,6 +10,7 @@ pub mod core;
 pub mod dynamics;
 pub mod collision;
 pub mod utils;
+pub mod gpu;
 
 pub use glam::{Mat3, Mat4, Quat, Vec3};
 
@@ -29,6 +30,7 @@ pub use collision::{
     queries::{Raycast, RaycastHit, RaycastQuery},
 };
 pub use utils::allocator::{Arena, EntityId, GenerationalId};
+pub use gpu::{ComputeBackend, GpuWorldState, NoopBackend};
 pub use world::PhysicsWorld;
 
 /// High-level convenience wrapper that owns a [`PhysicsWorld`].
@@ -57,6 +59,16 @@ impl PhysicsEngine {
     /// Advances the simulation by the provided delta time.
     pub fn step(&mut self, dt: f32) {
         self.world.step(dt);
+    }
+
+    /// Enables or disables parallel execution for integration and solver passes.
+    pub fn set_parallel_enabled(&mut self, enabled: bool) {
+        self.world.set_parallel_enabled(enabled);
+    }
+
+    /// Returns whether the engine is currently using parallel execution.
+    pub fn parallel_enabled(&self) -> bool {
+        self.world.parallel_enabled()
     }
 
     /// Immutable access to a rigid body by id.

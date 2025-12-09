@@ -32,3 +32,14 @@ pub enum Joint {
         distance: f32,
     },
 }
+
+impl Joint {
+    pub fn bodies(&self) -> (EntityId, EntityId) {
+        match self {
+            Joint::Fixed { body_a, body_b, .. }
+            | Joint::Revolute { body_a, body_b, .. }
+            | Joint::Spring { body_a, body_b, .. }
+            | Joint::Distance { body_a, body_b, .. } => (*body_a, *body_b),
+        }
+    }
+}

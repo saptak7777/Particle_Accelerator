@@ -7,7 +7,10 @@ use crate::{
         collider::{Collider, ColliderShape},
         rigidbody::RigidBody,
     },
-    utils::allocator::{Arena, EntityId},
+    utils::{
+        allocator::{Arena, EntityId},
+        simd,
+    },
 };
 
 /// Uniform grid spatial partitioning used by the broad-phase.
@@ -156,14 +159,12 @@ impl BroadPhase {
             ColliderShape::Cylinder { radius, height } => {
                 (radius * radius + (height / 2.0) * (height / 2.0)).sqrt()
             }
-            ColliderShape::ConvexHull { vertices } => vertices
-                .iter()
-                .map(|v| v.length())
-                .fold(0.0, f32::max),
+            ColliderShape::ConvexHull { vertices } => simd::max_length(vertices),
             ColliderShape::Compound { shapes } => shapes
                 .iter()
                 .map(|(transform, shape)| transform.position.length() + Self::get_collider_radius(shape))
                 .fold(0.0, f32::max),
+            ColliderShape::Mesh { mesh } => mesh.bounding_radius(),
         }
     }
 }

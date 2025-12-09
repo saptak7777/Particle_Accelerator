@@ -1,15 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    core::rigidbody::RigidBody,
+    core::{constraints::Joint, rigidbody::RigidBody},
     dynamics::solver::Contact,
-    utils::allocator::EntityId,
+    utils::allocator::{Arena, EntityId},
 };
 
 /// Represents a connected set of bodies/contacts that can be solved independently.
 pub struct Island {
     pub bodies: Vec<EntityId>,
     pub contacts: Vec<Contact>,
+    pub joints: Vec<Joint>,
     pub is_awake: bool,
 }
 
@@ -35,8 +36,9 @@ impl IslandManager {
 
     pub fn build_islands(
         &mut self,
-        bodies: &[RigidBody],
+        bodies: &Arena<RigidBody>,
         contacts: &[Contact],
+        joints: &[Joint],
     ) {
         self.islands.clear();
         self.adjacency.clear();
@@ -49,24 +51,50 @@ impl IslandManager {
             self.adjacency
                 .entry(contact.body_b)
                 .or_default()
-                .push(contact.body_a);
+                .push(contact.body_b);
+        }
+
+        for joint in joints {
+            let (body_a, body_b) = joint.bodies();
+            self.adjacency.entry(body_a).or_default().push(body_b);
+            self.adjacency.entry(body_b).or_default().push(body_a);
         }
 
         let mut visited = HashSet::new();
-        for body in bodies {
-            if visited.contains(&body.id) {
+        for body_id in bodies.ids() {
+            if visited.contains(&body_id) {
                 continue;
             }
-            let bodies_in_island = self.depth_first_collect(body.id, &mut visited);
+            let bodies_in_island = self.depth_first_collect(body_id, &mut visited);
+            if bodies_in_island.is_empty() {
+                continue;
+            }
+
+            let id_set: HashSet<_> = bodies_in_island.iter().copied().collect();
             let island_contacts = contacts
                 .iter()
-                .filter(|c| bodies_in_island.contains(&c.body_a) || bodies_in_island.contains(&c.body_b))
+                .filter(|c| id_set.contains(&c.body_a) || id_set.contains(&c.body_b))
                 .cloned()
                 .collect();
+            let island_joints = joints
+                .iter()
+                .filter(|j| {
+                    let (a, b) = j.bodies();
+                    id_set.contains(&a) || id_set.contains(&b)
+                })
+                .cloned()
+                .collect();
+            let is_awake = bodies_in_island.iter().any(|id| {
+                bodies
+                    .get(*id)
+                    .map(|body| body.is_awake && body.is_enabled)
+                    .unwrap_or(false)
+            });
             self.islands.push(Island {
                 bodies: bodies_in_island,
                 contacts: island_contacts,
-                is_awake: body.is_awake,
+                joints: island_joints,
+                is_awake,
             });
         }
     }
@@ -91,11 +119,11 @@ impl IslandManager {
         result
     }
 
-    pub fn update_sleeping(&mut self, bodies: &mut [RigidBody]) {
+    pub fn update_sleeping(&mut self, bodies: &mut Arena<RigidBody>) {
         for island in &mut self.islands {
             let mut avg_velocity = 0.0;
             for body_id in &island.bodies {
-                if let Some(body) = bodies.iter().find(|b| b.id == *body_id) {
+                if let Some(body) = bodies.get(*body_id) {
                     avg_velocity += body.velocity.linear.length_squared()
                         + body.velocity.angular.length_squared();
                 }
@@ -104,18 +132,22 @@ impl IslandManager {
             if avg_velocity < 0.01 {
                 island.is_awake = false;
                 for body_id in &island.bodies {
-                    if let Some(body) = bodies.iter_mut().find(|b| b.id == *body_id) {
+                    if let Some(body) = bodies.get_mut(*body_id) {
                         body.is_awake = false;
                     }
                 }
             } else {
                 island.is_awake = true;
                 for body_id in &island.bodies {
-                    if let Some(body) = bodies.iter_mut().find(|b| b.id == *body_id) {
+                    if let Some(body) = bodies.get_mut(*body_id) {
                         body.is_awake = true;
                     }
                 }
             }
         }
+    }
+
+    pub fn islands(&self) -> &[Island] {
+        &self.islands
     }
 }

@@ -11,6 +11,7 @@ pub struct Integrator {
     pub dt: f32,
     pub substeps: u32,
     pub gravity: Vec3,
+    parallel: bool,
 }
 
 impl Integrator {
@@ -20,7 +21,12 @@ impl Integrator {
             dt: substep_dt,
             substeps: substeps.max(1),
             gravity: Vec3::new(0.0, -9.81, 0.0),
+            parallel: false,
         }
+    }
+
+    pub fn set_parallel(&mut self, enabled: bool) {
+        self.parallel = enabled;
     }
 
     pub fn integrate_position(&self, body: &mut RigidBody, dt: f32) {
@@ -57,12 +63,20 @@ impl Integrator {
 
     pub fn step(&self, bodies: &mut Arena<RigidBody>) {
         for _ in 0..self.substeps {
-            for body in bodies.iter_mut() {
-                self.integrate_velocity(body, self.dt);
+            if self.parallel {
+                bodies.par_for_each_mut(|body| self.integrate_velocity(body, self.dt));
+            } else {
+                for body in bodies.iter_mut() {
+                    self.integrate_velocity(body, self.dt);
+                }
             }
 
-            for body in bodies.iter_mut() {
-                self.integrate_position(body, self.dt);
+            if self.parallel {
+                bodies.par_for_each_mut(|body| self.integrate_position(body, self.dt));
+            } else {
+                for body in bodies.iter_mut() {
+                    self.integrate_position(body, self.dt);
+                }
             }
         }
     }
