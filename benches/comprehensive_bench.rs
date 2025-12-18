@@ -28,8 +28,8 @@ fn bench_gpu_vs_cpu_broadphase(c: &mut Criterion) {
             })
         });
 
-        // For GPU, we'd need a real Vulkan device.
-        // This benchmark serves as a template for the user to run on their Intel Arc.
+        // GPU benchmarks require a valid Vulkan device and context.
+        // Performance testing is recommended on targeted hardware, such as Intel Arc.
         group.bench_with_input(
             BenchmarkId::new("gpu_grid_sync_overhead", count),
             &count,

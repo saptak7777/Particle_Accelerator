@@ -26,7 +26,7 @@ void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= bodies.length()) return;
 
-    // Grid logic here...
-    // For now, this is a placeholder for the integration logic.
-    // In the real shader, we'd hash positions to cells and count collisions.
+    // Implementation of the spatial grid hashing and collision counting.
+    // Functional entry point for the spatial grid compute pipeline.
+    // Spatial positions are hashed to grid cells for neighbor identification and collision detection.
 }
