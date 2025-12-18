@@ -1,7 +1,11 @@
 use glam::Vec3;
 
 use crate::{
-    core::{collider::{Collider, ColliderShape}, rigidbody::RigidBody, types::Transform},
+    core::{
+        collider::{Collider, ColliderShape},
+        soa::BodiesSoA,
+        types::Transform,
+    },
     utils::allocator::{Arena, EntityId},
 };
 
@@ -58,7 +62,7 @@ impl Raycast {
     pub fn cast(
         query: &RaycastQuery,
         colliders: &Arena<Collider>,
-        bodies: &Arena<RigidBody>,
+        bodies: &BodiesSoA,
     ) -> Vec<RaycastHit> {
         Self::cast_with_filter(query, colliders, bodies, |_, _| true)
     }
@@ -66,7 +70,7 @@ impl Raycast {
     pub fn cast_with_filter<F>(
         query: &RaycastQuery,
         colliders: &Arena<Collider>,
-        bodies: &Arena<RigidBody>,
+        bodies: &BodiesSoA,
         mut filter: F,
     ) -> Vec<RaycastHit>
     where
@@ -97,14 +101,14 @@ impl Raycast {
                 Some(b) => b,
                 None => continue,
             };
-            let world_transform = collider.world_transform(&body.transform);
+            let world_transform = collider.world_transform(body.transform());
 
             if let Some(hit) = Self::ray_shape_test(
                 query,
                 &collider.shape,
                 &world_transform,
                 collider.id,
-                body.id,
+                body.id(),
             ) {
                 hits.push(hit);
             }
@@ -170,25 +174,21 @@ impl Raycast {
                     },
                 )
             }
-            ColliderShape::Compound { shapes } => {
-                shapes
-                    .iter()
-                    .filter_map(|(local_transform, shape)| {
-                        let combined = transform.combine(local_transform);
-                        Self::ray_shape_test(query, shape, &combined, collider_id, body_id)
-                    })
-                    .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap())
+            ColliderShape::Compound { shapes } => shapes
+                .iter()
+                .filter_map(|(local_transform, shape)| {
+                    let combined = transform.combine(local_transform);
+                    Self::ray_shape_test(query, shape, &combined, collider_id, body_id)
+                })
+                .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap()),
+            ColliderShape::Mesh { mesh } => {
+                Self::ray_mesh(query, mesh, transform, collider_id, body_id)
             }
-            ColliderShape::Mesh { mesh } => Self::ray_mesh(query, mesh, transform, collider_id, body_id),
             _ => None,
         }
     }
 
-    fn ray_sphere(
-        query: &RaycastQuery,
-        center: Vec3,
-        radius: f32,
-    ) -> Option<(Vec3, f32)> {
+    fn ray_sphere(query: &RaycastQuery, center: Vec3, radius: f32) -> Option<(Vec3, f32)> {
         let oc = query.origin - center;
         let dir = query.direction.normalize_or_zero();
         let a = dir.length_squared();

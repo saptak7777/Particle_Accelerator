@@ -1,0 +1,32 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+struct Body {
+    vec3 position;
+    float padding;
+};
+
+layout(std430, binding = 0) buffer Positions {
+    Body bodies[];
+};
+
+layout(std430, binding = 1) buffer Bounds {
+    float bounds[];
+};
+
+layout(std430, binding = 2) buffer GridCounters {
+    uint count;
+    uint pair_count;
+};
+
+// Simplified Grid Broadphase
+// In a full implementation, this would use a prefix sum to assign cells
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= bodies.length()) return;
+
+    // Grid logic here...
+    // For now, this is a placeholder for the integration logic.
+    // In the real shader, we'd hash positions to cells and count collisions.
+}

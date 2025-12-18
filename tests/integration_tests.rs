@@ -13,8 +13,12 @@ fn bodies_fall_under_gravity() {
     let position_y = world
         .body(body_id)
         .expect("body should exist")
-        .transform
+        .transform()
         .position
         .y;
-    assert!(position_y < 10.0, "body should start falling, y = {}", position_y);
+    assert!(
+        position_y < 10.0,
+        "body should start falling, y = {}",
+        position_y
+    );
 }

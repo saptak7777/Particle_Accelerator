@@ -1,5 +1,6 @@
 use particle_accelerator::{
     collision::queries::{Raycast, RaycastQuery},
+    core::soa::BodiesSoA,
     core::{
         collider::{Collider, ColliderShape, CollisionFilter},
         rigidbody::RigidBody,
@@ -9,12 +10,10 @@ use particle_accelerator::{
     Vec3,
 };
 
-fn add_body(arena: &mut Arena<RigidBody>, position: Vec3) -> EntityId {
+fn add_body(arena: &mut BodiesSoA, position: Vec3) -> EntityId {
     let mut body = RigidBody::new(EntityId::default());
     body.transform.position = position;
-    let id = arena.insert(body);
-    arena.get_mut(id).unwrap().id = id;
-    id
+    arena.insert(body)
 }
 
 fn add_collider(
@@ -40,7 +39,7 @@ fn add_collider(
 
 #[test]
 fn raycast_filters_layers_and_triggers() {
-    let mut bodies = Arena::new();
+    let mut bodies = BodiesSoA::new();
     let mut colliders = Arena::new();
 
     let near_body = add_body(&mut bodies, Vec3::new(0.0, 0.0, 5.0));
@@ -94,7 +93,7 @@ fn raycast_filters_layers_and_triggers() {
 
 #[test]
 fn raycast_returns_closest_when_requested() {
-    let mut bodies = Arena::new();
+    let mut bodies = BodiesSoA::new();
     let mut colliders = Arena::new();
 
     let near_body = add_body(&mut bodies, Vec3::new(0.0, 0.0, 4.0));

@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    core::{constraints::Joint, rigidbody::RigidBody},
+    core::{constraints::Joint, soa::BodiesSoA},
     dynamics::solver::Contact,
-    utils::allocator::{Arena, EntityId},
+    utils::allocator::EntityId,
 };
 
 /// Represents a connected set of bodies/contacts that can be solved independently.
@@ -34,12 +34,7 @@ impl IslandManager {
         }
     }
 
-    pub fn build_islands(
-        &mut self,
-        bodies: &Arena<RigidBody>,
-        contacts: &[Contact],
-        joints: &[Joint],
-    ) {
+    pub fn build_islands(&mut self, bodies: &BodiesSoA, contacts: &[Contact], joints: &[Joint]) {
         self.islands.clear();
         self.adjacency.clear();
 
@@ -61,7 +56,9 @@ impl IslandManager {
         }
 
         let mut visited = HashSet::new();
-        for body_id in bodies.ids() {
+        // Iterate over all bodies in SoA
+        for body in bodies.iter() {
+            let body_id = body.id();
             if visited.contains(&body_id) {
                 continue;
             }
@@ -87,7 +84,7 @@ impl IslandManager {
             let is_awake = bodies_in_island.iter().any(|id| {
                 bodies
                     .get(*id)
-                    .map(|body| body.is_awake && body.is_enabled)
+                    .map(|body| body.is_awake() && body.is_enabled())
                     .unwrap_or(false)
             });
             self.islands.push(Island {
@@ -119,11 +116,11 @@ impl IslandManager {
         result
     }
 
-    pub fn update_sleeping(&mut self, bodies: &mut Arena<RigidBody>) {
+    pub fn update_sleeping(&mut self, bodies: &mut BodiesSoA) {
         for island in &mut self.islands {
             let mut avg_velocity = 0.0;
             for body_id in &island.bodies {
-                if let Some(body) = bodies.get(*body_id) {
+                if let Some(body) = bodies.get_mut(*body_id) {
                     avg_velocity += body.velocity.linear.length_squared()
                         + body.velocity.angular.length_squared();
                 }
@@ -132,15 +129,15 @@ impl IslandManager {
             if avg_velocity < 0.01 {
                 island.is_awake = false;
                 for body_id in &island.bodies {
-                    if let Some(body) = bodies.get_mut(*body_id) {
-                        body.is_awake = false;
+                    if let Some(mut body) = bodies.get_mut(*body_id) {
+                        body.set_awake(false);
                     }
                 }
             } else {
                 island.is_awake = true;
                 for body_id in &island.bodies {
-                    if let Some(body) = bodies.get_mut(*body_id) {
-                        body.is_awake = true;
+                    if let Some(mut body) = bodies.get_mut(*body_id) {
+                        body.set_awake(true);
                     }
                 }
             }

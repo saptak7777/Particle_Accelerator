@@ -78,22 +78,94 @@ impl RigidBody {
         self.is_awake = true;
     }
 
+    pub fn apply_angular_impulse(&mut self, angular_impulse: Vec3) {
+        if self.is_static {
+            return;
+        }
+        self.velocity.angular += self.inverse_inertia * angular_impulse;
+        self.is_awake = true;
+    }
+
     pub fn set_mass_properties(&mut self, props: MassProperties) {
         self.mass_properties = props;
         self.recompute_inverses();
     }
 
-    fn recompute_inverses(&mut self) {
+    pub fn recompute_inverses(&mut self) {
+        if self.is_static {
+            self.inverse_mass = 0.0;
+            self.inverse_inertia = Mat3::ZERO;
+            return;
+        }
         self.inverse_mass = if self.mass_properties.mass.abs() < f32::EPSILON {
             0.0
         } else {
             1.0 / self.mass_properties.mass
         };
-        let inverse_inertia = self.mass_properties.inertia.inverse();
-        if inverse_inertia.determinant().abs() < f32::EPSILON {
-            self.inverse_inertia = Mat3::IDENTITY;
+        let det = self.mass_properties.inertia.determinant();
+        if det.abs() < f32::EPSILON {
+            self.inverse_inertia = Mat3::ZERO;
         } else {
-            self.inverse_inertia = inverse_inertia;
+            self.inverse_inertia = self.mass_properties.inertia.inverse();
         }
+    }
+
+    pub fn builder() -> RigidBodyBuilder {
+        RigidBodyBuilder::new()
+    }
+}
+
+pub struct RigidBodyBuilder {
+    body: RigidBody,
+}
+
+impl Default for RigidBodyBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RigidBodyBuilder {
+    pub fn new() -> Self {
+        Self {
+            body: RigidBody::default(),
+        }
+    }
+
+    pub fn position(mut self, pos: Vec3) -> Self {
+        self.body.transform.position = pos;
+        self
+    }
+
+    pub fn rotation(mut self, rot: glam::Quat) -> Self {
+        self.body.transform.rotation = rot;
+        self
+    }
+
+    pub fn mass(mut self, mass: f32) -> Self {
+        self.body.mass_properties.mass = mass;
+        self.body.recompute_inverses();
+        self
+    }
+
+    pub fn inertia(mut self, inertia: Mat3) -> Self {
+        self.body.mass_properties.inertia = inertia;
+        self.body.recompute_inverses();
+        self
+    }
+
+    pub fn is_static(mut self, is_static: bool) -> Self {
+        self.body.is_static = is_static;
+        self.body.recompute_inverses();
+        self
+    }
+
+    pub fn velocity(mut self, linear: Vec3, angular: Vec3) -> Self {
+        self.body.set_velocity(linear, angular);
+        self
+    }
+
+    pub fn build(self) -> RigidBody {
+        self.body
     }
 }

@@ -1,10 +1,10 @@
-use crate::core::rigidbody::RigidBody;
-use crate::utils::allocator::{Arena, EntityId};
+use crate::core::soa::{BodiesSoA, BodyMut};
+use crate::utils::allocator::EntityId;
 use glam::Vec3;
 
 /// Trait describing an external force generator applied to rigid bodies.
 pub trait ForceGenerator: Send + Sync {
-    fn apply(&self, body: &mut RigidBody, dt: f32);
+    fn apply(&self, body: &mut BodyMut, dt: f32);
 }
 
 /// Constant gravity force scaled per body.
@@ -19,11 +19,11 @@ impl GravityForce {
 }
 
 impl ForceGenerator for GravityForce {
-    fn apply(&self, body: &mut RigidBody, _dt: f32) {
-        if body.is_static {
+    fn apply(&self, body: &mut BodyMut, _dt: f32) {
+        if body.is_static() {
             return;
         }
-        let force = self.gravity * body.mass_properties.mass * body.gravity_scale;
+        let force = self.gravity * body.mass_properties.mass * (*body.gravity_scale);
         body.apply_force(force);
     }
 }
@@ -34,8 +34,8 @@ pub struct DragForce {
 }
 
 impl ForceGenerator for DragForce {
-    fn apply(&self, body: &mut RigidBody, _dt: f32) {
-        if body.is_static {
+    fn apply(&self, body: &mut BodyMut, _dt: f32) {
+        if body.is_static() {
             return;
         }
 
@@ -58,7 +58,7 @@ pub struct SpringForce {
 }
 
 impl ForceGenerator for SpringForce {
-    fn apply(&self, body: &mut RigidBody, _dt: f32) {
+    fn apply(&self, body: &mut BodyMut, _dt: f32) {
         let displacement = body.transform.position - self.other_body_pos;
         let distance = displacement.length();
         if distance < 1e-6 {
@@ -86,27 +86,25 @@ impl Default for ForceRegistry {
 
 impl ForceRegistry {
     pub fn new() -> Self {
-        Self {
-            forces: Vec::new(),
-        }
+        Self { forces: Vec::new() }
     }
 
     pub fn add_force<F: ForceGenerator + 'static>(&mut self, force: F) {
         self.forces.push(Box::new(force));
     }
 
-    pub fn apply_all(&self, bodies: &mut Arena<RigidBody>, dt: f32) {
+    pub fn apply_all(&self, bodies: &mut BodiesSoA, dt: f32) {
         for force in &self.forces {
-            for body in bodies.iter_mut() {
-                force.apply(body, dt);
+            for mut body in bodies.iter_mut() {
+                force.apply(&mut body, dt);
             }
         }
     }
 
-    pub fn apply_force_to(&self, bodies: &mut Arena<RigidBody>, id: EntityId, dt: f32) {
-        if let Some(body) = bodies.get_mut(id) {
+    pub fn apply_force_to(&self, bodies: &mut BodiesSoA, id: EntityId, dt: f32) {
+        if let Some(mut body) = bodies.get_mut(id) {
             for force in &self.forces {
-                force.apply(body, dt);
+                force.apply(&mut body, dt);
             }
         }
     }

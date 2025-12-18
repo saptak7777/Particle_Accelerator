@@ -6,8 +6,9 @@ pub mod narrowphase;
 pub mod contact;
 pub mod queries;
 pub mod ccd;
+pub mod clipping;
 
 pub use broadphase::{BroadPhase, SpatialGrid};
-pub use contact::{ContactManifold, ContactSolverInput};
+pub use contact::ContactManifold;
 pub use queries::{Raycast, RaycastHit, RaycastQuery};
 pub use ccd::CCDDetector;

@@ -1,16 +1,12 @@
 use glam::{Quat, Vec3};
 
-use crate::{
-    core::rigidbody::RigidBody,
-    utils::allocator::Arena,
-};
+use crate::core::soa::{BodiesSoA, BodyMut};
 
 /// Integrator responsible for stepping rigid bodies forward in time.
 #[derive(Debug, Clone)]
 pub struct Integrator {
     pub dt: f32,
     pub substeps: u32,
-    pub gravity: Vec3,
     parallel: bool,
 }
 
@@ -20,7 +16,6 @@ impl Integrator {
         Self {
             dt: substep_dt,
             substeps: substeps.max(1),
-            gravity: Vec3::new(0.0, -9.81, 0.0),
             parallel: false,
         }
     }
@@ -29,8 +24,8 @@ impl Integrator {
         self.parallel = enabled;
     }
 
-    pub fn integrate_position(&self, body: &mut RigidBody, dt: f32) {
-        if body.is_static {
+    pub fn integrate_position(&self, body: &mut BodyMut, dt: f32) {
+        if body.flags.is_static {
             return;
         }
 
@@ -45,39 +40,41 @@ impl Integrator {
         }
     }
 
-    pub fn integrate_velocity(&self, body: &mut RigidBody, dt: f32) {
-        if body.is_static {
+    pub fn integrate_velocity(&self, body: &mut BodyMut, dt: f32) {
+        if body.flags.is_static {
             return;
         }
 
-        let gravity_force = self.gravity * body.mass_properties.mass * body.gravity_scale;
-        body.apply_force(gravity_force);
+        body.velocity.linear += (*body.acceleration) * dt;
 
-        body.velocity.linear += body.acceleration * dt;
+        body.velocity.linear *= (1.0 - (*body.linear_damping) * dt).max(0.0);
+        body.velocity.angular *= (1.0 - (*body.angular_damping) * dt).max(0.0);
 
-        body.velocity.linear *= (1.0 - body.linear_velocity_damping * dt).max(0.0);
-        body.velocity.angular *= (1.0 - body.angular_velocity_damping * dt).max(0.0);
-
-        body.acceleration = Vec3::ZERO;
+        *body.acceleration = Vec3::ZERO;
     }
 
-    pub fn step(&self, bodies: &mut Arena<RigidBody>) {
+    pub fn step(&self, bodies: &mut BodiesSoA) {
         for _ in 0..self.substeps {
+            // Parallel disabled for SoA initial implementation
+            /*
             if self.parallel {
                 bodies.par_for_each_mut(|body| self.integrate_velocity(body, self.dt));
             } else {
-                for body in bodies.iter_mut() {
-                    self.integrate_velocity(body, self.dt);
-                }
+            */
+            for mut body in bodies.iter_mut() {
+                self.integrate_velocity(&mut body, self.dt);
             }
+            //}
 
+            /*
             if self.parallel {
                 bodies.par_for_each_mut(|body| self.integrate_position(body, self.dt));
             } else {
-                for body in bodies.iter_mut() {
-                    self.integrate_position(body, self.dt);
-                }
+            */
+            for mut body in bodies.iter_mut() {
+                self.integrate_position(&mut body, self.dt);
             }
+            //}
         }
     }
 }

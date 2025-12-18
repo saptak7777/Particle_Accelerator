@@ -4,7 +4,7 @@ use crate::{
     core::{
         collider::{Collider, ColliderShape},
         rigidbody::RigidBody,
-        types::Transform,
+        types::{MaterialPairProperties, Transform},
     },
     dynamics::solver::Contact,
     utils::allocator::EntityId,
@@ -49,6 +49,12 @@ impl GJKAlgorithm {
                     normal: direction.normalize_or_zero(),
                     depth: 0.01,
                     relative_velocity: 0.0,
+                    feature_id: 0,
+                    accumulated_normal_impulse: 0.0,
+                    accumulated_tangent_impulse: Vec3::ZERO,
+                    accumulated_rolling_impulse: Vec3::ZERO,
+                    accumulated_torsional_impulse: 0.0,
+                    material: MaterialPairProperties::default(),
                 });
             }
         }
@@ -166,6 +172,12 @@ impl SATAlgorithm {
             normal: min_axis.normalize_or_zero(),
             depth: min_overlap,
             relative_velocity: 0.0,
+            feature_id: 0,
+            accumulated_normal_impulse: 0.0,
+            accumulated_tangent_impulse: Vec3::ZERO,
+            accumulated_rolling_impulse: Vec3::ZERO,
+            accumulated_torsional_impulse: 0.0,
+            material: MaterialPairProperties::default(),
         })
     }
 }
@@ -183,7 +195,7 @@ impl NarrowPhase {
         let transform_a = collider_a.world_transform(&body_a.transform);
         let transform_b = collider_b.world_transform(&body_b.transform);
 
-        match (&collider_a.shape, &collider_b.shape) {
+        let mut contact = match (&collider_a.shape, &collider_b.shape) {
             (ColliderShape::Box { half_extents: he_a }, ColliderShape::Box { half_extents: he_b }) => {
                 SATAlgorithm::intersect_boxes(*he_a, &transform_a, *he_b, &transform_b, body_a.id, body_b.id)
             }
@@ -195,6 +207,9 @@ impl NarrowPhase {
                 body_a.id,
                 body_b.id,
             ),
-        }
+        }?;
+
+        contact.material = MaterialPairProperties::from_materials(&body_a.material, &body_b.material);
+        Some(contact)
     }
 }

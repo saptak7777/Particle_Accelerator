@@ -25,6 +25,9 @@ fn main() {
 
     engine.step(1.0 / 60.0);
     if let Some(body) = engine.get_body(body_id) {
-        println!("Body position after one step: {:?}", body.transform.position);
+        println!(
+            "Body position after one step: {:?}",
+            body.transform().position
+        );
     }
 }

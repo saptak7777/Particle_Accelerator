@@ -1,19 +1,26 @@
 //! Particle Accelerator – Physics Engine for Rust.
-//! 
+//!
 //! This crate exposes a modular physics engine architecture built around
 //! ECS-friendly patterns, offering collision detection, dynamics,
 //! constraint solving, and utility modules out of the box.
 
+pub mod collision;
 pub mod config;
-pub mod world;
 pub mod core;
 pub mod dynamics;
-pub mod collision;
-pub mod utils;
 pub mod gpu;
+pub mod utils;
+pub mod world;
 
 pub use glam::{Mat3, Mat4, Quat, Vec3};
 
+pub use core::soa::{BodyMut, BodyRef};
+
+pub use collision::{
+    broadphase::BroadPhase,
+    contact::ContactManifold,
+    queries::{Raycast, RaycastHit, RaycastQuery},
+};
 pub use core::{
     collider::{Collider, ColliderShape, CollisionFilter},
     rigidbody::RigidBody,
@@ -24,13 +31,8 @@ pub use dynamics::{
     integrator::Integrator,
     solver::{ConstraintSolver, Contact},
 };
-pub use collision::{
-    broadphase::BroadPhase,
-    contact::ContactManifold,
-    queries::{Raycast, RaycastHit, RaycastQuery},
-};
-pub use utils::allocator::{Arena, EntityId, GenerationalId};
 pub use gpu::{ComputeBackend, GpuWorldState, NoopBackend};
+pub use utils::allocator::{Arena, EntityId, GenerationalId};
 pub use world::PhysicsWorld;
 
 /// High-level convenience wrapper that owns a [`PhysicsWorld`].
@@ -72,12 +74,12 @@ impl PhysicsEngine {
     }
 
     /// Immutable access to a rigid body by id.
-    pub fn get_body(&self, id: EntityId) -> Option<&RigidBody> {
+    pub fn get_body(&self, id: EntityId) -> Option<BodyRef<'_>> {
         self.world.body(id)
     }
 
     /// Mutable access to a rigid body by id.
-    pub fn get_body_mut(&mut self, id: EntityId) -> Option<&mut RigidBody> {
+    pub fn get_body_mut(&mut self, id: EntityId) -> Option<BodyMut<'_>> {
         self.world.body_mut(id)
     }
 }

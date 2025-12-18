@@ -6,13 +6,29 @@ use serde::{Deserialize, Serialize};
 /// Enumeration of supported collider geometries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ColliderShape {
-    Sphere { radius: f32 },
-    Box { half_extents: Vec3 },
-    Capsule { radius: f32, height: f32 },
-    Cylinder { radius: f32, height: f32 },
-    ConvexHull { vertices: Vec<Vec3> },
-    Compound { shapes: Vec<(Transform, ColliderShape)> },
-    Mesh { mesh: TriangleMesh },
+    Sphere {
+        radius: f32,
+    },
+    Box {
+        half_extents: Vec3,
+    },
+    Capsule {
+        radius: f32,
+        height: f32,
+    },
+    Cylinder {
+        radius: f32,
+        height: f32,
+    },
+    ConvexHull {
+        vertices: Vec<Vec3>,
+    },
+    Compound {
+        shapes: Vec<(Transform, ColliderShape)>,
+    },
+    Mesh {
+        mesh: TriangleMesh,
+    },
 }
 
 /// Simple collision filtering mask.
@@ -64,6 +80,75 @@ impl Collider {
     pub fn bounding_radius(&self) -> f32 {
         self.shape.bounding_radius()
     }
+
+    pub fn builder() -> ColliderBuilder {
+        ColliderBuilder::new()
+    }
+}
+
+pub struct ColliderBuilder {
+    shape: ColliderShape,
+    offset: Transform,
+    is_trigger: bool,
+    filter: CollisionFilter,
+}
+
+impl Default for ColliderBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ColliderBuilder {
+    pub fn new() -> Self {
+        Self {
+            shape: ColliderShape::Sphere { radius: 1.0 },
+            offset: Transform::default(),
+            is_trigger: false,
+            filter: CollisionFilter::default(),
+        }
+    }
+
+    pub fn sphere(mut self, radius: f32) -> Self {
+        self.shape = ColliderShape::Sphere { radius };
+        self
+    }
+
+    pub fn box_shape(mut self, half_extents: Vec3) -> Self {
+        self.shape = ColliderShape::Box { half_extents };
+        self
+    }
+
+    pub fn capsule(mut self, radius: f32, height: f32) -> Self {
+        self.shape = ColliderShape::Capsule { radius, height };
+        self
+    }
+
+    pub fn offset(mut self, offset: Transform) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn is_trigger(mut self, is_trigger: bool) -> Self {
+        self.is_trigger = is_trigger;
+        self
+    }
+
+    pub fn filter(mut self, layer: u32, mask: u32) -> Self {
+        self.filter = CollisionFilter { layer, mask };
+        self
+    }
+
+    pub fn build(self) -> Collider {
+        Collider {
+            id: EntityId::default(),
+            rigidbody_id: EntityId::default(),
+            shape: self.shape,
+            offset: self.offset,
+            is_trigger: self.is_trigger,
+            collision_filter: self.filter,
+        }
+    }
 }
 
 impl ColliderShape {
@@ -72,11 +157,12 @@ impl ColliderShape {
             ColliderShape::Sphere { radius } => *radius,
             ColliderShape::Box { half_extents } => half_extents.length(),
             ColliderShape::Capsule { radius, height } => radius + height * 0.5,
-            ColliderShape::Cylinder { radius, height } => (radius.powi(2) + (height * 0.5).powi(2)).sqrt(),
-            ColliderShape::ConvexHull { vertices } => vertices
-                .iter()
-                .map(|v| v.length())
-                .fold(0.0, f32::max),
+            ColliderShape::Cylinder { radius, height } => {
+                (radius.powi(2) + (height * 0.5).powi(2)).sqrt()
+            }
+            ColliderShape::ConvexHull { vertices } => {
+                vertices.iter().map(|v| v.length()).fold(0.0, f32::max)
+            }
             ColliderShape::Compound { shapes } => shapes
                 .iter()
                 .map(|(transform, shape)| transform.position.length() + shape.bounding_radius())

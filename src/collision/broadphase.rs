@@ -5,7 +5,7 @@ use glam::Vec3;
 use crate::{
     core::{
         collider::{Collider, ColliderShape},
-        rigidbody::RigidBody,
+        soa::BodiesSoA,
     },
     utils::{
         allocator::{Arena, EntityId},
@@ -42,10 +42,7 @@ impl SpatialGrid {
         for x in min_cell.0..=max_cell.0 {
             for y in min_cell.1..=max_cell.1 {
                 for z in min_cell.2..=max_cell.2 {
-                    self.grid
-                        .entry((x, y, z))
-                        .or_default()
-                        .push(entity_id);
+                    self.grid.entry((x, y, z)).or_default().push(entity_id);
                 }
             }
         }
@@ -71,7 +68,7 @@ impl SpatialGrid {
         results
     }
 
-    pub fn update(&mut self, colliders: &Arena<Collider>, bodies: &Arena<RigidBody>) {
+    pub fn update(&mut self, colliders: &Arena<Collider>, bodies: &BodiesSoA) {
         self.grid.clear();
 
         for collider_id in colliders.ids() {
@@ -84,7 +81,7 @@ impl SpatialGrid {
                 None => continue,
             };
 
-            let transform = collider.world_transform(&body.transform);
+            let transform = collider.world_transform(body.transform());
             let radius = BroadPhase::get_collider_radius(&collider.shape);
             self.insert(collider.id, transform.position, radius);
         }
@@ -108,9 +105,11 @@ impl BroadPhase {
     pub fn get_potential_pairs(
         &mut self,
         colliders: &Arena<Collider>,
-        bodies: &Arena<RigidBody>,
+        bodies: &BodiesSoA,
     ) -> Vec<(EntityId, EntityId)> {
         self.grid.update(colliders, bodies);
+
+        // println!("DEBUG: Broadphase grid updated. {} potential pairs.", 0); // placeholder
 
         let mut pairs = Vec::new();
         let mut checked = HashSet::new();
@@ -125,7 +124,7 @@ impl BroadPhase {
                 None => continue,
             };
 
-            let transform = collider.world_transform(&body.transform);
+            let transform = collider.world_transform(body.transform());
             let radius = Self::get_collider_radius(&collider.shape);
             let nearby = self.grid.query(transform.position, radius);
 
@@ -162,7 +161,9 @@ impl BroadPhase {
             ColliderShape::ConvexHull { vertices } => simd::max_length(vertices),
             ColliderShape::Compound { shapes } => shapes
                 .iter()
-                .map(|(transform, shape)| transform.position.length() + Self::get_collider_radius(shape))
+                .map(|(transform, shape)| {
+                    transform.position.length() + Self::get_collider_radius(shape)
+                })
                 .fold(0.0, f32::max),
             ColliderShape::Mesh { mesh } => mesh.bounding_radius(),
         }

@@ -1,5 +1,6 @@
-use particle_accelerator::*;
+use particle_accelerator::core::soa::BodiesSoA;
 use particle_accelerator::utils::allocator::Arena;
+use particle_accelerator::*;
 
 fn make_box_body(id: u32, position: Vec3) -> (RigidBody, Collider) {
     let mut body = RigidBody::new(EntityId::from_index(id));
@@ -28,8 +29,28 @@ fn contact_manifold_detects_box_overlap() {
     let manifold = ContactManifold::generate(&collider_a, &body_a, &collider_b, &body_b)
         .expect("overlapping boxes should generate contact");
 
-    assert!(!manifold.contacts.is_empty());
-    assert!(manifold.contacts[0].depth > 0.0);
+    assert!(!manifold.points.is_empty());
+    assert!(manifold.points[0].depth > 0.0);
+}
+
+#[test]
+fn box_box_manifold_produces_multiple_points() {
+    let (body_a, collider_a) = make_box_body(10, Vec3::ZERO);
+    let (mut body_b, collider_b) = make_box_body(11, Vec3::new(0.3, 0.0, 0.2));
+    body_b.is_static = false;
+
+    let manifold = ContactManifold::generate(&collider_a, &body_a, &collider_b, &body_b)
+        .expect("deep overlap should produce manifold");
+
+    assert!(
+        manifold.points.len() >= 2,
+        "manifold should contain multiple clipped points, got {}",
+        manifold.points.len()
+    );
+    assert!(
+        manifold.points.len() <= 4,
+        "manifold should be capped to 4 points"
+    );
 }
 
 #[test]
@@ -37,13 +58,11 @@ fn broadphase_returns_overlapping_pair() {
     let (body_a, mut collider_a) = make_box_body(2, Vec3::ZERO);
     let (body_b, mut collider_b) = make_box_body(3, Vec3::new(0.2, 0.0, 0.0));
     let mut broadphase = BroadPhase::new(1.0);
-    let mut bodies = Arena::new();
+    let mut bodies = BodiesSoA::new();
     let mut colliders = Arena::new();
 
     let body_a_id = bodies.insert(body_a);
-    bodies.get_mut(body_a_id).unwrap().id = body_a_id;
     let body_b_id = bodies.insert(body_b);
-    bodies.get_mut(body_b_id).unwrap().id = body_b_id;
 
     collider_a.rigidbody_id = body_a_id;
     let collider_a_id = colliders.insert(collider_a);
