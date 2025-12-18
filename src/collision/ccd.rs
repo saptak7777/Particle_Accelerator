@@ -297,7 +297,7 @@ impl CCDDetector {
                 // Colliding at mid, so impact was earlier
                 hi = mid;
             } else {
-                // Safe at mid, impact is later
+                // Midpoint is safe; the impact occurs in the latter half of the interval.
                 lo = mid;
             }
         }
