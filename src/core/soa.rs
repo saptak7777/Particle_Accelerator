@@ -32,7 +32,7 @@ pub struct BodiesSoA {
     pub free_list: VecDeque<usize>,
 
     // Core state (Dense vectors, but indexed sparsely by ID)
-    // We maintain valid data even in "free" slots to avoid Option wrappers.
+    // Valid data is maintained even in allocated "free" slots to avoid Option wrappers.
     // Validity is checked via generations.
     pub ids: Vec<EntityId>,
     pub transforms: Vec<Transform>,
@@ -80,7 +80,7 @@ impl BodiesSoA {
         // Increment generation to invalidate old IDs
         self.generations[index] = self.generations[index].wrapping_add(1);
         self.free_list.push_back(index);
-        // We don't verify if it was "active" because we don't have Option wrappers.
+        // Active status is not verified as the layout does not utilize Option wrappers.
         Some(())
     }
 
@@ -101,7 +101,7 @@ impl BodiesSoA {
             return None;
         }
         let i = id.index();
-        // SAFE: We are returning one mutable reference.
+        // SAFE: A single mutable reference is returned to the caller.
         Some(BodyMut {
             id,
             transform: &mut self.transforms[i],
@@ -203,9 +203,10 @@ impl BodiesSoA {
     }
 
     // Safe internal split-borrow helper?
-    // Implementing a full zipped iterator is verbose.
-    // We will use a custom iterator that uses raw pointers for the SoA fields
-    // to verify safety dynamically or just rely on index uniqueness (valid for 0..len).
+    // Validation is omitted as the SoA layout does not use Option wrappers.
+
+    // A custom iterator utilizing raw pointers is used for SoA fields
+    // to verify safety dynamically and ensure index uniqueness (valid for 0..len).
 
     pub fn iter_mut(&mut self) -> SoAIterMut<'_> {
         SoAIterMut::new(self)
@@ -295,8 +296,8 @@ impl<'a> BodyProxyMut<'a> {
 }
 
 pub struct SoAIterMut<'a> {
-    // We hold raw pointers + len to simulate split borrows
-    // SAFETY: We ensure we only yield unique indices.
+    // Raw pointers and length are maintained to facilitate split borrows.
+    // SAFETY: The iterator implementation guarantees the yielding of unique indices.
     len: usize,
     pos: usize,
     generations: &'a [u32],
@@ -351,7 +352,7 @@ impl<'a> Iterator for SoAIterMut<'a> {
             self.pos += 1;
 
             // Check generation validity
-            // NOTE: We assume 'ids' vector is kept in sync and stores the ID with the generation
+            // NOTE: The 'ids' vector is assumed to be synchronized, storing IDs with valid generations.
             // at the time of insertion/update.
             if self.generations[i] != self.ids[i].generation() {
                 continue;

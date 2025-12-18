@@ -140,7 +140,7 @@ impl CCDDetector {
         // Penetration is SumRadii - Distance.
         // If Distance > SumRadii, Penetration is negative (Gap).
         // If Distance < SumRadii, Penetration is positive (Overlap).
-        // We include speculative margin in the check: if Gap < Margin, generate contact.
+        // Speculative margin is included: a contact is generated if the gap is less than the margin.
         // Gap = Distance - SumRadii.
         // Condition: Gap < Margin => Distance - SumRadii < Margin => SumRadii - Distance > -Margin.
         // penetration > -Margin.
@@ -151,41 +151,14 @@ impl CCDDetector {
             return None;
         }
 
-        // IMPORTANT: The depth passed to the solver must be the CURRENT separation (negative),
-        // not the PREDICTED penetration. If we pass predicted (+), the solver will "depenetrate"
-        // before we even hit, causing a bounce from a distance.
-        // We calculate current penetration using the same direction/support point logic but current positions.
+        // The depth passed to the solver must represent the current separation (negative),
+        // not the predicted penetration at the end of the frame. Providing a predicted
+        // penetration value would cause the solver to apply a corrective impulse
+        // prematurely, resulting in non-physical bouncing before contact occurs.
 
-        // We use the predicted direction as the normal, as that's the impact axis.
-        // If objects are at 0.9 and 2.0. DistVec = (0,0,1.1). Normal (0,0,-1).
-        // Proj = -1.1.
-        // Support A (Z-1) -> 0.5. Support B (Z+1) -> 0.5.
-        // Depth = SumSupport - Distance?
-        // Distance is |PosB - PosA|? No, along normal.
-        // For sphere/box, logic is:
-        // PointA = PosA + R*Normal. PointB = PosB + R*(-Normal).
-        // Depth = (PointA - PointB) . Normal.
-        // PointA = 0.9 + 0.5(-1) = 0.4.
-        // PointB = 2.0 + 0.5(1) = 2.5.
-        // PT_A - PT_B = 0.4 - 2.5 = -2.1.
-        // Dot Normal(-1) = 2.1. ??
-        // Something is wrong.
-
-        // Let's stick to Center Distance for Sphere/Sphere or simple shapes.
-        // Depth = SumSupport - (CenterB - CenterA).dot(Normal)?
-        // If Normal is A->B. (0,0,1).
-        // CenterB - CenterA = (0,0,1.1). Dot = 1.1.
-        // SumSupport = 1.0.
-        // Depth = 1.0 - 1.1 = -0.1. (Correct).
-        // If Normal is (0,0,-1) [B->A]?
-        // CenterB - CenterA = 1.1. Dot = -1.1.
-        // Depth = 1.0 - (-1.1) = 2.1 ???
-
-        // Normal in `generate_speculative` was `(predicted_b - predicted_a).normalize()`.
-        // A=0.9->1.1. B=2.0->2.0.
-        // PredB(2.0) - PredA(1.1) = 0.9.
-        // Dir = (0,0,1).
-        // So Normal points A->B.
+        // The predicted relative direction is used as the contact normal, as it
+        // represents the primary axis of impact. Depth is calculated along this
+        // normal using the support points of both colliders at their current positions.
 
         let point = predicted_a + direction * support_a;
 
@@ -271,10 +244,10 @@ impl CCDDetector {
         }
 
         // 2. Check for collision at critical points (Entry and Midpoint)
-        // We check midpoint first as it's the deepest penetration of spheres
+        // The midpoint is checked initially as it represents the deepest sphere penetration.
         let t_mid = (t_in + t_out) * 0.5;
 
-        // If we collide at t_in, we are already touching/penetrating -> TOI = t_in
+        // Contact at t_in indicates an existing overlap; TOI is set to t_in.
         if self
             .sample_contact(body_a, collider_a, body_b, collider_b, t_in)
             .is_some()
@@ -282,9 +255,8 @@ impl CCDDetector {
             return Some(t_in);
         }
 
-        // If we don't collide at t_mid, and spheres are convex, we likely missed it or didn't penetrate enough.
-        // For robustness, we could check t_out too ccd_threshold permitting.
-        // If we DO collide at t_mid, we have a bracket [t_in, t_mid]
+        // Absence of collision at t_mid suggesting a miss or insufficient penetration for the interval.
+        // The bracket [t_in, t_mid] is established when a collision is detected at t_mid.
         if self
             .sample_contact(body_a, collider_a, body_b, collider_b, t_mid)
             .is_some()
@@ -400,12 +372,12 @@ impl CCDDetector {
             let local_pos = body_b.transform.rotation.conjugate() * rel_pos;
             let extents = *half_extents * body_b.transform.scale.abs();
 
-            // If we are strictly outside, the normal is trivial
+            // Trivial normal for strictly external points.
             let clamped = local_pos.clamp(-extents, extents);
             let diff = local_pos - clamped;
 
             if diff.length_squared() > 1e-6 {
-                // diff points from SurfaceB to CenterA (B->A). We want A->B.
+                // The difference vector points from SurfaceB to CenterA (B->A). Orientation is adjusted to A->B.
                 return -(body_b.transform.rotation * diff).normalize_or_zero();
             } else {
                 // Inside or surface. Find axis of min penetration (closest face)
@@ -460,13 +432,12 @@ impl CCDDetector {
                         best_axis = -axes[i];
                     }
                 }
-                // Normal points B->A, but here we calculated A->B logic, so return negated?
-                // Wait. We want Normal B->A (pointing towards A).
+                // Normal orientation is adjusted to point B->A.
                 // Logic above finds direction to surface.
                 // Using rel_pos = B - A. Local pos of B in A.
                 // Clamped is on A's surface. Diff = PosB - SurfaceA. Points Outwards from A towards B.
                 // So Normal is A->B.
-                // We want B->A. So negate.
+                // Orientation is negated to align with B->A.
                 return -(body_a.transform.rotation * best_axis);
             }
         }

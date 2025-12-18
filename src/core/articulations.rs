@@ -38,7 +38,7 @@ impl JointType {
                 ..Transform::default()
             },
             JointType::Spherical => {
-                // q[0..3] as exponential coordinates or euler? Let's use Euler for simplicity in MVP.
+                // Exponential coordinates or Euler angles for q[0..3]. Euler angles are utilized for simplicity.
                 Transform {
                     rotation: glam::Quat::from_euler(glam::EulerRot::XYZ, q[0], q[1], q[2]),
                     ..Transform::default()
@@ -189,10 +189,9 @@ impl Multibody {
                     v_joint = v_joint + (*s * dq_slice[j]);
                 }
 
-                // Transform parent velocity to current link frame?
-                // Featherstone usually works in link frames for simplicity.
-                // We'll keep it simple for now and assume world space or handle xforms later.
-                // For MVP, let's just add velocities if aligned.
+                // Featherstone's algorithm typically utilizes link-local frames for simplicity.
+                // Currently, world space is assumed, or transforms are handled in a separate pass.
+                // Joint velocities are combined directly if they are aligned.
                 self.spatial_velocities[i] = self.spatial_velocities[p_idx] + v_joint;
             } else {
                 self.world_transforms[i] = rel_x;

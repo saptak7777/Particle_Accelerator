@@ -166,8 +166,7 @@ impl PersistentManifold {
         }
 
         if updated_points.len() > MAX_MANIFOLD_POINTS {
-            self.points =
-                select_best_points(updated_points, MAX_MANIFOLD_POINTS, self.normal);
+            self.points = select_best_points(updated_points, MAX_MANIFOLD_POINTS, self.normal);
         } else {
             self.points = updated_points;
         }
@@ -194,7 +193,11 @@ impl PersistentManifold {
     }
 
     fn apply_impulses(&mut self, contact: &Contact) {
-        if let Some(point) = self.points.iter_mut().find(|p| p.feature_id == contact.feature_id) {
+        if let Some(point) = self
+            .points
+            .iter_mut()
+            .find(|p| p.feature_id == contact.feature_id)
+        {
             point.normal_impulse = contact.accumulated_normal_impulse;
             point.tangent_impulse = contact.accumulated_tangent_impulse;
             point.rolling_impulse = contact.accumulated_rolling_impulse;
@@ -256,8 +259,8 @@ fn generate_box_box_manifold(
     let reference_axis = descriptor.axis_index;
     let reference_sign = descriptor.face_sign;
     let reference_normal = reference.axes[reference_axis] * reference_sign;
-    let reference_center =
-        reference.center + reference.axes[reference_axis] * reference.half_extents[reference_axis] * reference_sign;
+    let reference_center = reference.center
+        + reference.axes[reference_axis] * reference.half_extents[reference_axis] * reference_sign;
 
     let normal = if reference_is_a {
         reference_normal
@@ -443,8 +446,8 @@ fn find_incident_face(box_geom: &BoxGeometry, normal: Vec3) -> (usize, f32) {
 }
 
 fn face_vertices(box_geom: &BoxGeometry, face_index: usize, sign: f32) -> [Vec3; 4] {
-    let face_center = box_geom.center
-        + box_geom.axes[face_index] * box_geom.half_extents[face_index] * sign;
+    let face_center =
+        box_geom.center + box_geom.axes[face_index] * box_geom.half_extents[face_index] * sign;
     let (u_idx, v_idx) = face_tangent_indices(face_index);
     let u = box_geom.axes[u_idx] * box_geom.half_extents[u_idx];
     let v = box_geom.axes[v_idx] * box_geom.half_extents[v_idx];
@@ -623,7 +626,13 @@ impl ManifoldCache {
                 .manifolds
                 .entry(key)
                 .or_insert_with(|| PersistentManifold::new(body_a, body_b));
-            entry.update(manifold.normal, &manifold.points, rigid_a, rigid_b, self.frame);
+            entry.update(
+                manifold.normal,
+                &manifold.points,
+                rigid_a,
+                rigid_b,
+                self.frame,
+            );
             let contacts = entry.to_contacts();
             let snapshot = if wants_debug {
                 Some(entry.debug_snapshot(self.frame))
@@ -646,8 +655,8 @@ impl ManifoldCache {
             .manifolds
             .entry(key)
             .or_insert_with(|| PersistentManifold::new(contact.body_a, contact.body_b));
-        // Fake rigid bodies for CCD? we cannot compute local without references.
-        // For CCD we skip local update; assume zero so warm-start minimal.
+        // Local coordinates are omitted for CCD-generated contacts due to the absence of body references.
+        // Warm-starting is minimized by assuming zero local contact offsets for these cases.
         entry.last_frame = self.frame;
         if entry.points.len() >= MAX_MANIFOLD_POINTS {
             entry.points.clear();
@@ -665,11 +674,11 @@ impl ManifoldCache {
             torsional_impulse: contact.accumulated_torsional_impulse,
         });
 
-        if let Some(snapshot) = self
-            .debug_hook
-            .as_ref()
-            .and_then(|_| self.manifolds.get(&key).map(|m| m.debug_snapshot(self.frame)))
-        {
+        if let Some(snapshot) = self.debug_hook.as_ref().and_then(|_| {
+            self.manifolds
+                .get(&key)
+                .map(|m| m.debug_snapshot(self.frame))
+        }) {
             if let Some(hook) = self.debug_hook.as_mut() {
                 hook(&snapshot);
             }

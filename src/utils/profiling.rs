@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 /// Global or Thread-Local profiler state would be ideal, but for now
-/// we'll attach it to the PhysicsWorld and pass it down or access it via a static if needed.
+/// The profiler is attached to the PhysicsWorld and accessed via direct members or static handles.
 /// Simple structure to hold frame timing data.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PhysicsProfiler {

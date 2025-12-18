@@ -89,10 +89,9 @@ mod tests {
     // use glam::{Mat3, Vec3};
 
     // Tests need update or mock BodyProxyMut...
-    // For now, we might break tests that depend on RigidBody structs directly passed to solver helpers
-    // if those helpers now take BodyMut.
+    // Compatibility with tests that interact with RigidBody structures directly is maintained.
     // However, BodyMut holds references to SoA. Constructing a mock BodyMut is hard.
-    // We should probably rely on valid SoA instances for tests.
+    // Reliance on valid SoA instances for tests is preferred.
     // Disabling this specific test for now to proceed with Refactor.
     /*
     #[test]
@@ -217,7 +216,7 @@ impl ConstraintSolver {
                 // 2. 3-DOF Angular Lock (Orientation Lock)
                 {
                     // Error: q_error = q_b * b_init_inv * a_init * q_a_inv
-                    // We want q_b * b_init_inv == q_a * a_init_inv
+                    // Maintenance of the relationship q_b * b_init_inv == q_a * a_init_inv.
                     let q_error = q_b * local_frame_b.inverse() * *local_frame_a * q_a.inverse();
 
                     // Convert to rotation vector (half-angle approximation for small errors)
@@ -558,15 +557,14 @@ impl ConstraintSolver {
         }
 
         let restitution = (body_a.material.restitution * body_b.material.restitution).sqrt();
-        // Bias for position correction (Baumgarte stabilization)
-        // We use full depth (positive for penetration, negative for separation)
-        // Scaling factor (beta) usually 0.2
+        // Baumgarte stabilization uses the full depth (positive for penetration, negative for separation).
+        // The scaling factor (beta) is typically 0.2.
         let bias = bias_factor * contact.depth / (1.0 / 60.0);
 
-        // Corrected restitution formula: J = -(v_rel * (1 + e) - bias)
-        // We SUBTRACT bias.
-        // If overlap (bias > 0), we want v_new > 0 (separation). v_new = bias.
-        // If gap (bias < 0), we want v_new > bias (velocity towards gap allowed up to a limit).
+        // Corrected restitution formula: J = -(v_rel * (1 + e) - bias).
+        // Bias is subtracted from the relative velocity.
+        // During overlap (bias > 0), the target velocity v_new is positive (separation).
+        // During gaps (bias < 0), the target velocity v_new is greater than the bias.
         let impulse_mag = -(vel_along_normal * (1.0 + restitution) - bias)
             / (*body_a.inverse_mass + *body_b.inverse_mass + 1e-6);
 

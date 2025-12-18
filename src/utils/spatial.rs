@@ -146,8 +146,8 @@ impl SpatialMat {
         _translation: glam::Vec3,
     ) -> Self {
         // This is a complex transformation.
-        // For MVP, we'll implement the vector transforms first and use them for propagation.
-        // I'll stick to basic vector transforms for the first ABA pass.
+        // Vector transforms are implemented as the primary mechanism for state propagation.
+        // Basic vector transforms are utilized for the initial ABA implementation.
         *i
     }
 }

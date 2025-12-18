@@ -319,7 +319,7 @@ impl PhysicsWorld {
                     self.solve_islands_sequential();
                 }
                 */
-                // For SoA, we use global solver for now
+                // The global solver is used for SoA-based dynamics.
                 self.solver.solve(
                     &mut self.bodies,
                     &self.joints,
@@ -442,8 +442,8 @@ impl PhysicsWorld {
                 self.ccd
                     .detect_ccd(&rb_a, collider_a, &rb_b, collider_b, self.time_step)
             {
-                // Advance bodies to TOI to ensure contact is resolved at correct time
-                // We update the SoA proxies directly
+                // Advance bodies to the Time-of-Impact (TOI) to ensure contact is resolved
+                // at the correct temporal position. The SoA proxies are updated directly.
                 let advance_dt = ccd_hit.time_of_impact;
                 body_a_mut.transform.position += body_a_mut.velocity.linear * advance_dt;
                 body_b_mut.transform.position += body_b_mut.velocity.linear * advance_dt;

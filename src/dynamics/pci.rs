@@ -69,7 +69,7 @@ impl PredictiveCorrectiveIntegrator {
                 }
 
                 // 3. Solve for correction impulse
-                // We want to reduce predicted_penetration to penetration_slop.
+                // The goal is to reduce predicted_penetration to penetration_slop.
                 // delta_penetration = predicted_penetration - slop
                 // required_vel_change = delta_penetration / dt
 
