@@ -143,7 +143,7 @@ impl ComputeBackend for AshBackend {
             return;
         }
 
-        let pipeline = match &self.broadphase_pipeline {
+        let _pipeline = match &self.broadphase_pipeline {
             Some(p) => p,
             None => return,
         };
@@ -154,7 +154,7 @@ impl ComputeBackend for AshBackend {
             let pair_buf = self.pair_buffer.lock();
             let counter_buf = self.counter_buffer.lock();
 
-            if let (Some(bodies), Some(grid), Some(pairs), Some(counters)) =
+            if let (Some(_bodies), Some(grid), Some(_pairs), Some(counters)) =
                 (&*body_buf, &*grid_buf, &*pair_buf, &*counter_buf)
             {
                 // In a real implementation, we'd use command buffers from AshRenderer.

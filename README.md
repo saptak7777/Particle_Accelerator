@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/saptak7777/Particle_Accelerator/actions/workflows/rust.yml/badge.svg)](https://github.com/saptak7777/Particle_Accelerator/actions)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**Particle Accelerator** is a high-performance, modular physics engine prototype written in Rust. Designed for scalability and modern hardware, it features a structure-of-arrays (SoA) data layout, SIMD-accelerated narrowphase, and a Vulkan-based GPU broadphase.
+**Particle Accelerator** is a high-performance physics engine prototype built in Rust. It utilizes a Structure-of-Arrays (SoA) data layout, SIMD-accelerated narrowphase, and a Vulkan-based GPU broadphase for optimized hardware utilization.
 
 ## Key Features
 
@@ -107,7 +107,7 @@ _Benchmarks performed on **Intel Core i5-11400F** and **Intel Arc A380 (16GB RAM
 
 ## Safety & Stability
 
-The project leverages Miri for memory safety verification of its Structure-of-Arrays (SoA) implementation and undergoes continuous fuzz testing for numerical robustness.
+Memory safety is validated via Miri for all Structure-of-Arrays (SoA) logic. Continuous fuzz testing ensures numerical robustness across GJK/EPA solvers.
 
 ## License
 

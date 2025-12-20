@@ -1,7 +1,7 @@
 # Particle Accelerator – Architecture
 
 ## Overview
-Particle Accelerator is a modular, high-performance physics engine designed for massively parallel simulation. It utilizes a Structure-of-Arrays (SoA) layout for optimal cache utilization and seamless CPU-GPU data transfer. The engine is organized into specific subsystems that handle dynamics, collision detection, and hardware acceleration.
+Particle Accelerator is a modular physics engine built for massively parallel simulation. It uses a Structure-of-Arrays (SoA) layout for high cache residency and zero-copy CPU-GPU data transfers. The engine architecture partitions responsibilities into dedicated subsystems for dynamics, collision, and acceleration.
 
 ## Module Layout
 ```
