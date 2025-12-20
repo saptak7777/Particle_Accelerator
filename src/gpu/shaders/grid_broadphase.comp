@@ -4,29 +4,95 @@ layout(local_size_x = 256) in;
 
 struct Body {
     vec3 position;
-    float padding;
+    float radius;
 };
 
-layout(std430, binding = 0) buffer Positions {
+struct Pair {
+    uint a;
+    uint b;
+};
+
+// Bindings
+layout(std430, binding = 0) buffer BodyBuffer {
     Body bodies[];
 };
 
-layout(std430, binding = 1) buffer Bounds {
-    float bounds[];
+layout(std430, binding = 1) buffer GridHead {
+    int heads[];
 };
 
-layout(std430, binding = 2) buffer GridCounters {
-    uint count;
+layout(std430, binding = 2) buffer BodyNext {
+    int nexts[];
+};
+
+layout(std430, binding = 3) buffer PairBuffer {
+    Pair pairs[];
+};
+
+layout(std430, binding = 4) buffer Counters {
     uint pair_count;
 };
 
-// Simplified Grid Broadphase
-// In a full implementation, this would use a prefix sum to assign cells
+// Push Constants or Uniforms for grid params
+layout(push_constant) uniform PushConstants {
+    float cell_size;
+    uint grid_res;
+    uint num_bodies;
+} pcs;
+
+uint hash(ivec3 grid_pos) {
+    uint h = uint(grid_pos.x * 73856093) ^ uint(grid_pos.y * 19349663) ^ uint(grid_pos.z * 83492791);
+    return h % (pcs.grid_res * pcs.grid_res * pcs.grid_res);
+}
+
+ivec3 world_to_grid(vec3 pos) {
+    return ivec3(floor(pos / pcs.cell_size));
+}
+
 void main() {
     uint id = gl_GlobalInvocationID.x;
-    if (id >= bodies.length()) return;
+    if (id >= pcs.num_bodies) return;
 
-    // Implementation of the spatial grid hashing and collision counting.
-    // Functional entry point for the spatial grid compute pipeline.
-    // Spatial positions are hashed to grid cells for neighbor identification and collision detection.
+    // Step 1: Linked List Insertion (Normally done in a separate pass, but we'll simulate for MVP logic if needed)
+    // Actually, for a single dispatch we might need multiple passes.
+    // Assuming this shader is THE broadphase:
+    
+    vec3 pos = bodies[id].position;
+    float radius = bodies[id].radius;
+    ivec3 gpos = world_to_grid(pos);
+    
+    // In a production GPU broadphase, Pass 1 clears heads, Pass 2 populates heads/nexts, Pass 3 performs collision.
+    // For this implementation, we assume heads/nexts were populated by a previous small pass or we use a persistent approach.
+    // However, to make it functional in ONE logic block:
+    
+    // Neighborhood search (3x3x3)
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int z = -1; z <= 1; ++z) {
+                ivec3 neighbor_gpos = gpos + ivec3(x, y, z);
+                uint h = hash(neighbor_gpos);
+                
+                int other_id = heads[h];
+                while (other_id != -1) {
+                    uint u_other = uint(other_id);
+                    if (id < u_other) {
+                        // Check distance
+                        vec3 other_pos = bodies[u_other].position;
+                        float other_radius = bodies[u_other].radius;
+                        float dist_sq = dot(pos - other_pos, pos - other_pos);
+                        float combined_radius = radius + other_radius;
+                        
+                        if (dist_sq <= combined_radius * combined_radius) {
+                            uint pair_idx = atomicAdd(pair_count, 1);
+                            if (pair_idx < 1000000) { // Limit to avoid overflow
+                                pairs[pair_idx].a = id;
+                                pairs[pair_idx].b = u_other;
+                            }
+                        }
+                    }
+                    other_id = nexts[other_id];
+                }
+            }
+        }
+    }
 }

@@ -8,13 +8,18 @@ use crate::{
     utils::allocator::Arena,
 };
 
+/// GPU-friendly rigid body data.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GpuBody {
+    pub position: Vec3,
+    pub radius: f32,
+}
+
 /// Snapshot of world data converted into a GPU-friendly structure-of-arrays layout.
 #[derive(Debug, Default, Clone)]
 pub struct GpuWorldState {
-    pub positions: Vec<Vec3>,
-    pub velocities: Vec<Vec3>,
-    pub inverse_masses: Vec<f32>,
-    pub collider_bounds: Vec<f32>,
+    pub bodies: Vec<GpuBody>,
 }
 
 impl GpuWorldState {
@@ -24,28 +29,31 @@ impl GpuWorldState {
 
     /// Synchronizes the CPU arenas into the GPU-friendly buffers.
     pub fn sync(&mut self, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>) {
-        self.positions.clear();
-        self.velocities.clear();
-        self.inverse_masses.clear();
-        self.collider_bounds.clear();
+        self.bodies.clear();
 
         for body_id in bodies.ids() {
             if let Some(body) = bodies.get(body_id) {
-                self.positions.push(body.transform.position);
-                self.velocities.push(body.velocity.linear);
-                self.inverse_masses.push(body.inverse_mass);
-            }
-        }
+                // Find associated collider radius
+                let mut radius = 0.0;
+                for col_id in colliders.ids() {
+                    if let Some(col) = colliders.get(col_id) {
+                        if col.rigidbody_id == body_id {
+                            radius = col.bounding_radius();
+                            break;
+                        }
+                    }
+                }
 
-        for collider_id in colliders.ids() {
-            if let Some(collider) = colliders.get(collider_id) {
-                self.collider_bounds.push(collider.bounding_radius());
+                self.bodies.push(GpuBody {
+                    position: body.transform.position,
+                    radius,
+                });
             }
         }
     }
 
     pub fn body_count(&self) -> usize {
-        self.positions.len()
+        self.bodies.len()
     }
 }
 
