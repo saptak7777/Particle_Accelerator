@@ -14,3 +14,7 @@ Thumbs.db
 # Logs and temporary reports
 *.log
 *.txt
+
+# Exclude all markdown files except README
+*.md
+!README.md

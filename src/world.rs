@@ -363,7 +363,7 @@ impl PhysicsWorld {
 
             {
                 // Sleeping update
-                // self.islands.update_sleeping(&mut self.bodies);
+                self.islands.update_sleeping(&mut self.bodies);
             }
 
             self.manifold_cache.prune_stale();

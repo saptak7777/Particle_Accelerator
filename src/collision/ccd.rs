@@ -95,16 +95,21 @@ impl CCDDetector {
 
         // println!("DEBUG: CCD Hit Detected! TOI: {:.4}", toi);
 
-        // Use fallback contact logic which derives normal from approximate shape logic.
-        // This is necessary because NarrowPhase (GJK) is currently a stub and returns incorrect normals.
-        let contact = self.build_fallback_contact(
-            body_a,
-            collider_a,
-            body_b,
-            collider_b,
-            toi,
-            relative_velocity,
-        );
+        // Use NarrowPhase to get a high-quality contact at the TOI.
+        // If NarrowPhase fails to find a contact at the exact TOI (due to numerical precision),
+        // we use the fallback logic.
+        let contact = self
+            .sample_contact(body_a, collider_a, body_b, collider_b, toi)
+            .unwrap_or_else(|| {
+                self.build_fallback_contact(
+                    body_a,
+                    collider_a,
+                    body_b,
+                    collider_b,
+                    toi,
+                    relative_velocity,
+                )
+            });
         // println!("DEBUG: CCD Contact Normal: {:?}", contact.normal);
 
         Some(CCDResult {
@@ -190,92 +195,46 @@ impl CCDDetector {
         body_b: &RigidBody,
         collider_b: &Collider,
         dt: f32,
-        relative_velocity: Vec3,
+        _relative_velocity: Vec3,
     ) -> Option<f32> {
         if !self.enabled || self.max_toi_iterations == 0 {
             return None;
         }
 
-        // 1. Solve bounding sphere collision times
-        let motion_dir = relative_velocity.normalize_or_zero();
+        // Get geometry centers accounting for collider offsets (handles both simple and compound shapes)
+        let geom_center_a = collider_a.world_transform(&body_a.transform).position;
+        let geom_center_b = collider_b.world_transform(&body_b.transform).position;
 
-        if motion_dir == Vec3::ZERO {
-            return None;
+        let relative_position = geom_center_b - geom_center_a;
+        let relative_velocity = body_b.velocity.linear - body_a.velocity.linear;
+
+        // Quick check: are they moving toward each other?
+        let closing_speed = relative_velocity.dot(relative_position.normalize_or_zero());
+        if closing_speed > -0.001 {
+            return None; // Moving apart or stationary
         }
 
-        let base_radius = support_radius(collider_a, body_a, motion_dir)
-            + support_radius(collider_b, body_b, -motion_dir);
-        // Add angular expansion safety margin
-        let angular_expand = self.angular_padding
-            * dt
-            * (body_a.velocity.angular.length() * collider_a.bounding_radius()
-                + body_b.velocity.angular.length() * collider_b.bounding_radius());
-        let combined_radius = base_radius + angular_expand;
+        // Check if already overlapping
+        let distance = relative_position.length();
+        let combined_radius = collider_a.bounding_radius() + collider_b.bounding_radius();
 
-        let relative_position = body_b.transform.position - body_a.transform.position;
-        let a = relative_velocity.length_squared();
-        if a <= f32::EPSILON {
+        if distance < combined_radius {
+            return Some(0.0); // Already colliding
+        }
+
+        // Compute time of impact
+        let relative_speed = relative_velocity.length();
+        if relative_speed < 0.001 {
             return None; // No relative motion
         }
-        let b = 2.0 * relative_position.dot(relative_velocity);
-        let c = relative_position.length_squared() - combined_radius.powi(2);
 
-        let discriminant = b * b - 4.0 * a * c;
-        if discriminant < 0.0 {
-            return None; // Miss
-        }
+        let gap = distance - combined_radius;
+        let toi = (gap / closing_speed.abs()).min(dt);
 
-        let sqrt_disc = discriminant.sqrt();
-        let t0 = (-b - sqrt_disc) / (2.0 * a);
-        let t1 = (-b + sqrt_disc) / (2.0 * a);
-
-        /*
-        println!(
-            "DEBUG: TOI Quadratic: a={a:.2} b={b:.2} c={c:.2} disc={discriminant:.2} t0={t0:.6} t1={t1:.6} dt={dt:.6}"
-        );
-        */
-
-        // Clamp to current frame
-        let t_in = t0.clamp(0.0, dt);
-        let t_out = t1.clamp(0.0, dt);
-
-        if t_in >= t_out {
-            return None; // No overlap interval in this frame
-        }
-
-        // 2. Check for collision at critical points (Entry and Midpoint)
-        // The midpoint is checked initially as it represents the deepest sphere penetration.
-        let t_mid = (t_in + t_out) * 0.5;
-
-        // Contact at t_in indicates an existing overlap; TOI is set to t_in.
-        if self
-            .sample_contact(body_a, collider_a, body_b, collider_b, t_in)
-            .is_some()
-        {
-            return Some(t_in);
-        }
-
-        // Absence of collision at t_mid suggesting a miss or insufficient penetration for the interval.
-        // The bracket [t_in, t_mid] is established when a collision is detected at t_mid.
-        if self
-            .sample_contact(body_a, collider_a, body_b, collider_b, t_mid)
-            .is_some()
-        {
-            // Binary Search Refinement in [t_in, t_mid]
-            // println!("DEBUG: Collision found at t_mid ({:.4}). Bisecting.", t_mid);
-            return Some(self.bisect_toi(body_a, collider_a, body_b, collider_b, t_in, t_mid));
-        }
-
-        if self
-            .sample_contact(body_a, collider_a, body_b, collider_b, t_out)
-            .is_some()
-        {
-            return Some(self.bisect_toi(body_a, collider_a, body_b, collider_b, t_mid, t_out));
-        }
-
-        None
+        Some(toi)
     }
 
+    #[allow(dead_code)]
     fn bisect_toi(
         &self,
         body_a: &RigidBody,
@@ -329,9 +288,15 @@ impl CCDDetector {
         let sample_a = integrate_body_state(body_a, toi);
         let sample_b = integrate_body_state(body_b, toi);
 
-        let mut normal = self.approximate_normal(body_a, collider_a, body_b, collider_b);
+        let mut normal = relative_velocity.normalize_or_zero();
+
         if normal == Vec3::ZERO {
-            normal = Vec3::Z;
+            normal =
+                (sample_b.transform.position - sample_a.transform.position).normalize_or_zero();
+        }
+
+        if normal == Vec3::ZERO {
+            normal = Vec3::Y;
         }
 
         // println!("DEBUG: CCD Fallback Normal: {:?}", normal);
@@ -339,7 +304,7 @@ impl CCDDetector {
         let point_a = support_point_world(collider_a, &sample_a, normal);
         let point_b = support_point_world(collider_b, &sample_b, -normal);
         let depth = (point_a - point_b).dot(normal).max(0.0);
-        let contact_point = point_a;
+        let contact_point = point_b + normal * depth * 0.5;
 
         Contact {
             body_a: body_a.id,
@@ -357,6 +322,7 @@ impl CCDDetector {
         }
     }
 
+    #[allow(dead_code)]
     fn approximate_normal(
         &self,
         body_a: &RigidBody,

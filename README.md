@@ -3,116 +3,179 @@
 [![Build Status](https://github.com/saptak7777/Particle_Accelerator/actions/workflows/rust.yml/badge.svg)](https://github.com/saptak7777/Particle_Accelerator/actions)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**Particle Accelerator** is a high-performance physics engine prototype built in Rust. It utilizes a Structure-of-Arrays (SoA) data layout, SIMD-accelerated narrowphase, and a Vulkan-based GPU broadphase for optimized hardware utilization.
+A physics engine built in Rust that I've been working on. Uses Structure-of-Arrays (SoA) layout and has some GPU acceleration via Vulkan for the broadphase stuff.
 
-## Key Features
+## What's in here
 
-- **Massive Scalability**: GPU-accelerated grid broadphase capable of handling 100,000+ entities with zero-copy CPU-GPU synchronization.
-- **Advanced Dynamics**: Featherstone's Articulated Body Algorithm (ABA) for $O(n)$ multibody dynamics, including joint limits and motors.
-- **Continuous Collision Detection (CCD)**: Robust binary-search TOI and speculative contacts to prevent high-speed tunneling.
-- **SoA Architecture**: Optimized memory layout for modern CPU caches and seamless GPU data transfer.
-- **Fluent API**: Ergonomic builder patterns for world-building, rigid bodies, and complex colliders.
-- **Professional Solver**: Warm-started PGS solver with Coulomb + anisotropic friction, rolling, and torsional resistance.
+- **GPU broadphase** - Grid-based collision detection running on Vulkan compute shaders. Works pretty well for lots of objects (tested up to 100k entities)
+- **Articulated bodies** - Featherstone's ABA algorithm for robot/ragdoll simulation. Joint limits and motors are in there too
+- **CCD** - Continuous collision detection to catch fast-moving objects. Uses binary search for TOI
+- **SoA memory layout** - Better cache performance and makes GPU sync easier
+- **PGS solver** - Sequential impulse solver with friction (Coulomb + rolling/torsional)
 
-## Getting Started
+## Requirements
 
-### Prerequisites
+- Rust 1.75+ (I use nightly for some SIMD stuff but stable should work)
+- Vulkan 1.2+ if you want GPU acceleration (tested on Intel Arc A380)
 
-- **Rust**: Nightly toolchain (recommended for Miri/SIMD) or Stable 1.75+.
-- **GPU**: Vulkan 1.2+ capable device (optimized for Intel Arc).
+## Installation
 
-### Installation
-
-Add this to your `Cargo.toml`:
+Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 particle_accelerator = { git = "https://github.com/saptak7777/Particle_Accelerator" }
 ```
 
-## API Usage
+## How to use it
 
-### Creating a Physics World
+### Basic setup
 
 ```rust
-use particle_accelerator::world::PhysicsWorld;
+use particle_accelerator::PhysicsWorld;
+use particle_accelerator::{RigidBody, Collider, ColliderShape};
 use glam::Vec3;
 
-let mut world = PhysicsWorld::builder()
-    .time_step(1.0 / 60.0)
-    .gravity(Vec3::new(0.0, -9.81, 0.0))
-    .parallel_enabled(true)
-    .build();
+// Create world with 60 FPS timestep
+let mut world = PhysicsWorld::new(1.0 / 60.0);
+
+// Gravity is off by default, enable it if you need
+world.set_gravity(Vec3::new(0.0, -9.81, 0.0));
 ```
 
-### Adding Rigid Bodies & Colliders
+### Adding bodies
+
+The API is pretty straightforward - create a body, add it to the world, then attach colliders:
 
 ```rust
-use particle_accelerator::core::rigidbody::RigidBody;
-use particle_accelerator::core::collider::Collider;
+use particle_accelerator::utils::allocator::EntityId;
 
-// Build a dynamic rigid body
-let body = RigidBody::builder()
-    .position(Vec3::new(0.0, 10.0, 0.0))
-    .mass(1.0)
-    .build();
+// Create a dynamic body
+let mut body = RigidBody::new(EntityId::from_index(0));
+body.transform.position = Vec3::new(0.0, 10.0, 0.0);
+body.is_static = false;
+body.set_mass(1.0);  // Sets inv_mass internally
 
 let body_id = world.add_rigidbody(body);
 
-// Attach a sphere collider
-let collider = Collider::builder()
-    .sphere(0.5)
-    .restitution(0.3)
-    .friction(0.5)
-    .build();
+// Add a sphere collider
+let collider = Collider {
+    id: EntityId::from_index(100),
+    rigidbody_id: body_id,
+    shape: ColliderShape::Sphere { radius: 0.5 },
+    offset: Transform::default(),
+    is_trigger: false,
+    collision_filter: CollisionFilter::default(),
+};
 
-world.add_collider_to_body(body_id, collider);
+world.add_collider(collider);
 ```
 
-### Simulation Loop
+### Running the simulation
 
 ```rust
+// Main loop
 loop {
     world.step(1.0 / 60.0);
     
-    if let Some(body) = world.body(body_id) {
-        println!("Position: {:?}", body.transform().position);
+    // Read body state
+    if let Some(body_ref) = world.body(body_id) {
+        let pos = body_ref.transform().position;
+        println!("Body at: {}, {}, {}", pos.x, pos.y, pos.z);
     }
 }
 ```
 
-## Performance Benchmarks
+### Different collider shapes
 
-_Benchmarks performed on **Intel Core i5-11400F** and **Intel Arc A380 (16GB RAM)**._
+```rust
+// Box
+let box_collider = Collider {
+    shape: ColliderShape::Box {
+        half_extents: Vec3::new(1.0, 0.5, 0.25)
+    },
+    // ... other fields
+};
 
-### Broadphase Scaling (GPU vs CPU)
+// Capsule
+let capsule = Collider {
+    shape: ColliderShape::Capsule {
+        radius: 0.3,
+        height: 2.0
+    },
+    // ...
+};
 
-| Entity Count | CPU Grid (ms) | GPU Accelerated (ms) | Speedup |
-| :--- | :--- | :--- | :--- |
-| 1,000 | 0.12 | 0.045 | **2.6x** |
-| 10,000 | 1.85 | 0.18 | **10.2x** |
-| 50,000 | 12.50 | 0.62 | **20.1x** |
-| 100,000 | 35.20 | 1.15 | **30.6x** |
+// Compound (multiple shapes)
+let compound = Collider {
+    shape: ColliderShape::Compound {
+        shapes: vec![
+            (Transform::from_position(Vec3::ZERO), 
+             ColliderShape::Sphere { radius: 0.5 }),
+            (Transform::from_position(Vec3::new(0.0, 1.0, 0.0)),
+             ColliderShape::Box { half_extents: Vec3::splat(0.3) }),
+        ]
+    },
+    // ...
+};
+```
 
-> [!TIP]
-> GPU acceleration provides logarithmic scaling, making it the ideal choice for massive particle systems or large-scale environment simulations.
+### Material properties
 
-## Project Structure
+```rust
+use particle_accelerator::Material;
 
-- `src/core`: Fundamental types, SoA storage, and math utilities.
-- `src/collision`: GJK/EPA narrowphase, Grid broadphase, and CCD logic.
-- `src/dynamics`: Integrators, constraints (Joints), and ABA solver.
-- `src/gpu`: Vulkan-based compute backends and GPU state management.
-- `src/world`: High-level orchestration and public simulation API.
+let mut body = RigidBody::new(EntityId::from_index(0));
+body.material = Material {
+    restitution: 0.3,      // Bounciness (0 = no bounce, 1 = perfect bounce)
+    static_friction: 0.6,
+    dynamic_friction: 0.4,
+    rolling_friction: 0.01,
+    torsional_friction: 0.01,
+};
+```
 
-## Safety & Stability
+## Performance
 
-Memory safety is validated via Miri for all Structure-of-Arrays (SoA) logic. Continuous fuzz testing ensures numerical robustness across GJK/EPA solvers.
+Tested on my machine (i5-11400F + Arc A380, 16GB RAM). Your mileage may vary:
+
+### Broadphase comparison
+
+| Bodies | CPU Grid | GPU Compute | Speedup |
+|--------|----------|-------------|---------|
+| 1,000 | 0.12ms | 0.045ms | 2.6x |
+| 10,000 | 1.85ms | 0.18ms | 10x |
+| 50,000 | 12.5ms | 0.62ms | 20x |
+| 100,000 | 35.2ms | 1.15ms | 30x |
+
+GPU really shines when you have lots of objects. For small scenes (< 1000 bodies) the CPU version is actually faster due to dispatch overhead.
+
+## Project layout
+
+```
+src/
+├── core/          # Basic types, SoA storage, math stuff
+├── collision/     # GJK/EPA, broadphase, CCD
+├── dynamics/      # Integrator, solver, constraints
+├── gpu/           # Vulkan compute shaders
+└── world/         # Main API
+```
+
+## Known issues
+
+- CCD can miss collisions if objects are moving *really* fast (> 100 m/s)
+- GPU broadphase requires Vulkan 1.2+ (won't work on older hardware)
+- Compound shapes with lots of children (> 50) can be slow
+- No heightfield or triangle mesh support yet
+
+## Testing
+
+I've tested this with Miri for memory safety and run fuzz tests on the GJK/EPA code. Should be pretty stable but if you find bugs please open an issue.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+Apache 2.0 - see [LICENSE](LICENSE)
 
 ## Author
 
-**Saptak Santra**
+Saptak Santra

@@ -13,7 +13,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 log = "0.4.29"
 parking_lot = "0.12.5"
 rayon = "1.11.0"
-ash_renderer = "0.3.9"
+ash_renderer = "0.4.7"
 ash = "0.38.0"
 vk-mem = "0.5.0"
 

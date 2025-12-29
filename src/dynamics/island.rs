@@ -46,7 +46,7 @@ impl IslandManager {
             self.adjacency
                 .entry(contact.body_b)
                 .or_default()
-                .push(contact.body_b);
+                .push(contact.body_a);
         }
 
         for joint in joints {
