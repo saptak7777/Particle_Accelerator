@@ -119,6 +119,7 @@ fn bench_gjk(c: &mut Criterion) {
                     &transforms_b[i],
                     EntityId::default(),
                     EntityId::default(),
+                    None,
                 ));
             }
         })

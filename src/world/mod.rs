@@ -2,12 +2,11 @@
 
 use crate::{
     collision::{
-        broadphase::BroadPhase,
         ccd::CCDDetector,
-        contact::{ContactManifold, ManifoldCache, ManifoldDebugInfo},
+        contact::{ContactManifold, ManifoldDebugInfo},
         queries::{Raycast, RaycastHit, RaycastQuery},
     },
-    config::{DEFAULT_BROADPHASE_CELL_SIZE, DEFAULT_GRAVITY, DEFAULT_TIME_STEP},
+    config::{DEFAULT_GRAVITY, DEFAULT_TIME_STEP},
     core::{
         articulations::Multibody,
         collider::{Collider, CollisionFilter},
@@ -16,11 +15,10 @@ use crate::{
         soa::{BodiesSoA, BodyMut, BodyRef},
     },
     dynamics::{
-        forces::ForceRegistry,
         integrator::Integrator,
         island::IslandManager,
         pci::PredictiveCorrectiveIntegrator,
-        solver::{Contact, PGSSolver, SolverStepMetrics},
+        solver::{Contact, SolverStepMetrics},
     },
     gpu::{ComputeBackend, GpuWorldState, NoopBackend},
     utils::{
@@ -34,24 +32,26 @@ use log::debug;
 // use rayon::prelude::*;
 use std::time::Duration;
 
+pub mod collision_manager;
+pub mod dynamics_manager;
+
+use collision_manager::CollisionManager;
+use dynamics_manager::DynamicsManager;
+
 /// Central simulation container orchestrating all subsystems.
 pub struct PhysicsWorld {
     pub bodies: BodiesSoA,
     pub colliders: Arena<Collider>,
     pub integrator: Integrator,
-    pub solver: PGSSolver,
-    pub joints: Vec<Joint>,
+    pub dynamics: DynamicsManager,
+    pub collision: CollisionManager,
     pub gravity: Vec3,
     pub time_accumulated: f32,
     pub time_step: f32,
-    pub force_registry: ForceRegistry,
-    broadphase: BroadPhase,
     islands: IslandManager,
-    ccd: CCDDetector,
     parallel_enabled: bool,
     gpu_state: GpuWorldState,
     gpu_backend: Box<dyn ComputeBackend>,
-    manifold_cache: ManifoldCache,
     frame_index: u32,
     manifold_debug_logging: bool,
     last_solver_metrics: SolverStepMetrics,
@@ -115,21 +115,17 @@ impl PhysicsWorldBuilder {
             bodies: BodiesSoA::new(),
             colliders: Arena::new(),
             integrator: Integrator::new(ts, 2),
-            solver: PGSSolver::new(),
-            joints: Vec::new(),
+            dynamics: DynamicsManager::new(),
+            collision: CollisionManager::new(),
             gravity: self.gravity,
             time_accumulated: 0.0,
             time_step: ts,
-            force_registry: ForceRegistry::new(),
-            broadphase: BroadPhase::new(DEFAULT_BROADPHASE_CELL_SIZE),
             islands: IslandManager::new(),
-            ccd: CCDDetector::new(),
             parallel_enabled: self.parallel_enabled,
             gpu_state: GpuWorldState::new(),
             gpu_backend: self
                 .gpu_backend
                 .unwrap_or_else(|| Box::new(NoopBackend::new())),
-            manifold_cache: ManifoldCache::new(),
             frame_index: 0,
             manifold_debug_logging: false,
             last_solver_metrics: SolverStepMetrics::default(),
@@ -170,23 +166,23 @@ impl PhysicsWorld {
     }
 
     pub fn ccd(&self) -> &CCDDetector {
-        &self.ccd
+        &self.collision.ccd
     }
 
     pub fn ccd_mut(&mut self) -> &mut CCDDetector {
-        &mut self.ccd
+        &mut self.collision.ccd
     }
 
     pub fn set_ccd_enabled(&mut self, enabled: bool) {
-        self.ccd.set_enabled(enabled);
+        self.collision.ccd.set_enabled(enabled);
     }
 
     pub fn set_ccd_threshold(&mut self, threshold: f32) {
-        self.ccd.set_ccd_threshold(threshold);
+        self.collision.ccd.set_ccd_threshold(threshold);
     }
 
     pub fn set_ccd_angular_padding(&mut self, padding: f32) {
-        self.ccd.set_angular_padding(padding);
+        self.collision.ccd.set_angular_padding(padding);
     }
 
     pub fn raycast(&self, query: &RaycastQuery) -> Vec<RaycastHit> {
@@ -202,13 +198,13 @@ impl PhysicsWorld {
 
     pub fn set_manifold_debug_hook<F>(&mut self, hook: Option<F>)
     where
-        F: FnMut(&ManifoldDebugInfo) + Send + 'static,
+        F: Fn(&ManifoldDebugInfo) + Send + Sync + 'static,
     {
-        self.manifold_cache.set_debug_hook(hook);
+        self.collision.manifold_cache.set_debug_hook(hook);
     }
 
     pub fn manifold_debug_snapshots(&self) -> Vec<ManifoldDebugInfo> {
-        self.manifold_cache.debug_snapshots()
+        self.collision.manifold_cache.debug_snapshots()
     }
 
     pub fn set_manifold_logging_enabled(&mut self, enabled: bool) {
@@ -232,7 +228,7 @@ impl PhysicsWorld {
     }
 
     pub fn add_joint(&mut self, joint: Joint) {
-        self.joints.push(joint);
+        self.dynamics.joints.push(joint);
     }
 
     pub fn add_multibody(&mut self, mb: Multibody) -> EntityId {
@@ -240,7 +236,7 @@ impl PhysicsWorld {
     }
 
     pub fn clear_joints(&mut self) {
-        self.joints.clear();
+        self.dynamics.joints.clear();
     }
 
     pub fn add_rigidbody(&mut self, mut body: RigidBody) -> EntityId {
@@ -281,22 +277,28 @@ impl PhysicsWorld {
         while self.time_accumulated >= self.time_step {
             self.time_accumulated -= self.time_step;
             self.frame_index = self.frame_index.wrapping_add(1);
-            self.manifold_cache.begin_frame(self.frame_index);
+            self.collision.manifold_cache.begin_frame(self.frame_index);
 
             self.profiler.reset();
             self.profiler.total_frame_time = Duration::ZERO;
             let frame_start = std::time::Instant::now();
 
             self.apply_gravity();
-            self.force_registry
+            self.dynamics
+                .force_registry
                 .apply_all(&mut self.bodies, self.time_step);
             self.sync_gpu_state();
-            // TODO: Timer for GPU dispatch?
+
+            // Phase 1: Continuous Collision Detection (BEFORE integration)
+            let ccd_contacts = self.resolve_ccd_velocities();
+
+            // Broad-phase Dispatch (Prepare for contact generation)
             self.gpu_backend.dispatch_broadphase(&self.gpu_state);
 
-            let mut contacts = {
+            let contacts = {
                 let start = std::time::Instant::now();
-                let c = self.generate_contacts();
+                let mut c = self.generate_contacts();
+                c.extend(ccd_contacts); // Ensure CCD hits are solved
                 self.profiler.broad_phase_time = start.elapsed();
                 c
             };
@@ -305,28 +307,18 @@ impl PhysicsWorld {
             {
                 let start = std::time::Instant::now();
                 self.islands
-                    .build_islands(&self.bodies, &contacts, &self.joints);
+                    .build_islands(&self.bodies, &contacts, &self.dynamics.joints);
                 self.profiler.narrow_phase_time = start.elapsed();
             }
             self.profiler.active_island_count = self.islands.islands().len();
 
             {
                 let start = std::time::Instant::now();
-                /*
                 if self.parallel_enabled {
                     self.solve_islands_parallel();
                 } else {
                     self.solve_islands_sequential();
                 }
-                */
-                // The global solver is used for SoA-based dynamics.
-                self.solver.solve(
-                    &mut self.bodies,
-                    &self.joints,
-                    &mut contacts,
-                    self.time_step,
-                );
-
                 self.apply_predictive_corrections(&contacts);
                 self.profiler.solver_time = start.elapsed();
             }
@@ -334,17 +326,14 @@ impl PhysicsWorld {
             self.log_solver_metrics_if_needed();
             self.gpu_backend.dispatch_solver(&self.gpu_state);
 
+            // Integrate (Move bodies based on velocity)
+            let start_int = std::time::Instant::now();
+            self.integrator.step(&mut self.bodies);
+            self.profiler.integrator_time = start_int.elapsed();
+
             {
                 // 5. Articulation Step (ABA)
                 for mb in self.articulated_bodies.iter_mut() {
-                    /*
-                    // Apply Gravity Force to all links
-                    for i in 0..mb.links.len() {
-                        let link = &mb.links[i];
-                        // tau = G(q)
-                    }
-                    */
-
                     crate::dynamics::aba::ABASolver::solve(mb, self.gravity);
 
                     // Integrate Generalized coordinates (Semi-implicit Euler)
@@ -355,10 +344,6 @@ impl PhysicsWorld {
 
                     mb.update_kinematics();
                 }
-
-                let start = std::time::Instant::now();
-                self.integrator.step(&mut self.bodies);
-                self.profiler.integrator_time = start.elapsed();
             }
 
             {
@@ -366,7 +351,7 @@ impl PhysicsWorld {
                 self.islands.update_sleeping(&mut self.bodies);
             }
 
-            self.manifold_cache.prune_stale();
+            self.collision.manifold_cache.prune_stale();
             self.log_manifolds_if_needed();
 
             self.profiler.total_frame_time = frame_start.elapsed();
@@ -397,6 +382,7 @@ impl PhysicsWorld {
 
         let mut contacts = Vec::new();
         let potential_pairs = self
+            .collision
             .broadphase
             .get_potential_pairs(&self.colliders, &self.bodies);
 
@@ -428,8 +414,9 @@ impl PhysicsWorld {
             if let Some(manifold) = ContactManifold::generate(collider_a, &rb_a, collider_b, &rb_b)
             {
                 contacts.extend(
-                    self.manifold_cache
-                        .update_pair(rb_a.id, rb_b.id, manifold, &rb_a, &rb_b),
+                    self.collision
+                        .manifold_cache
+                        .update_pair(manifold, collider_a, collider_b, &rb_a, &rb_b),
                 );
                 continue;
             }
@@ -438,34 +425,87 @@ impl PhysicsWorld {
                 continue;
             }
 
-            if let Some(ccd_hit) =
-                self.ccd
-                    .detect_ccd(&rb_a, collider_a, &rb_b, collider_b, self.time_step)
-            {
-                // Advance bodies to the Time-of-Impact (TOI) to ensure contact is resolved
-                // at the correct temporal position. The SoA proxies are updated directly.
-                let advance_dt = ccd_hit.time_of_impact;
-                body_a_mut.transform.position += body_a_mut.velocity.linear * advance_dt;
-                body_b_mut.transform.position += body_b_mut.velocity.linear * advance_dt;
-
-                self.manifold_cache.record_contact(&ccd_hit.contact);
-                contacts.push(ccd_hit.contact);
-                continue;
-            }
-
-            if let Some(speculative) = self.ccd.generate_speculative_contact(
+            if let Some(speculative) = self.collision.ccd.generate_speculative_contact(
                 &rb_a,
                 collider_a,
                 &rb_b,
                 collider_b,
                 self.time_step,
             ) {
-                self.manifold_cache.record_contact(&speculative);
+                self.collision.manifold_cache.record_contact(&speculative);
                 contacts.push(speculative);
             }
         }
 
         contacts
+    }
+
+    fn resolve_ccd_velocities(&mut self) -> Vec<Contact> {
+        let mut ccd_contacts = Vec::new();
+        if self.colliders.len() < 2 {
+            return ccd_contacts;
+        }
+
+        let potential_pairs = self
+            .collision
+            .broadphase
+            .get_potential_pairs(&self.colliders, &self.bodies);
+
+        for (collider_a_id, collider_b_id) in potential_pairs {
+            let collider_a = match self.colliders.get(collider_a_id) {
+                Some(collider) => collider,
+                None => continue,
+            };
+            let collider_b = match self.colliders.get(collider_b_id) {
+                Some(collider) => collider,
+                None => continue,
+            };
+
+            if !Self::filters_match(&collider_a.collision_filter, &collider_b.collision_filter) {
+                continue;
+            }
+
+            let (body_a_mut, body_b_mut) = match self
+                .bodies
+                .get2_mut(collider_a.rigidbody_id, collider_b.rigidbody_id)
+            {
+                Some(pair) => pair,
+                None => continue,
+            };
+
+            let rb_a = body_a_mut.to_rigid_body();
+            let rb_b = body_b_mut.to_rigid_body();
+
+            if let Some(ccd_hit) =
+                self.collision
+                    .ccd
+                    .detect_ccd(&rb_a, collider_a, &rb_b, collider_b, self.time_step)
+            {
+                // TOI found - collision will happen at time toi.
+                // Scale velocity to reach the impact point exactly during integration.
+                let toi = ccd_hit.time_of_impact;
+                let scale = if self.time_step > 1e-6 {
+                    (toi / self.time_step).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+
+                if !body_a_mut.is_static() {
+                    body_a_mut.velocity.linear *= scale;
+                }
+                if !body_b_mut.is_static() {
+                    body_b_mut.velocity.linear *= scale;
+                }
+
+                // Inject the contact into the manifold cache immediately so the solver sees it.
+                self.collision
+                    .manifold_cache
+                    .record_contact(&ccd_hit.contact);
+
+                ccd_contacts.push(ccd_hit.contact);
+            }
+        }
+        ccd_contacts
     }
 
     fn filters_match(filter_a: &CollisionFilter, filter_b: &CollisionFilter) -> bool {
@@ -528,7 +568,6 @@ impl PhysicsWorld {
         self.pci.apply(&mut self.bodies, contacts, self.time_step);
     }
 
-    /*
     fn solve_islands_sequential(&mut self) {
         let mut metrics = SolverStepMetrics::default();
         for island in self.islands.islands() {
@@ -536,16 +575,27 @@ impl PhysicsWorld {
                 continue;
             }
             let mut contacts = island.contacts.clone();
-            self.solver
-                .solve(&mut self.bodies, &island.joints, &mut contacts, self.time_step);
-            self.manifold_cache.apply_impulses(&contacts);
+
+            // Sequential solver still uses global SoA for simplicity,
+            // but we could use the slice-based one too.
+            self.dynamics.solver.solve(
+                &mut self.bodies,
+                &island.joints,
+                &mut contacts,
+                self.time_step,
+            );
+            self.collision.manifold_cache.apply_impulses(&contacts);
             metrics.record_island(&contacts, island.joints.len());
         }
         self.last_solver_metrics = metrics;
     }
 
     fn solve_islands_parallel(&mut self) {
-        let solver = self.solver.clone();
+        use rayon::prelude::*;
+
+        let solver = self.dynamics.solver.clone();
+        let dt = self.time_step;
+
         let mut jobs: Vec<IslandJob> = self
             .islands
             .islands()
@@ -555,20 +605,26 @@ impl PhysicsWorld {
             .collect();
 
         jobs.par_iter_mut().for_each(|job| {
-            solver.solve_island_slice(&mut job.bodies, &job.id_map, &mut job.contacts, &job.joints);
+            solver.solve_island_slice(
+                &mut job.bodies,
+                &job.id_map,
+                &mut job.contacts,
+                &job.joints,
+                dt,
+            );
         });
 
         let mut metrics = SolverStepMetrics::default();
 
         for job in &jobs {
-            self.manifold_cache.apply_impulses(&job.contacts);
+            self.collision.manifold_cache.apply_impulses(&job.contacts);
             metrics.record_island(&job.contacts, job.joints.len());
         }
 
         for job in jobs {
             for (id, body_state) in job.ids.into_iter().zip(job.bodies.into_iter()) {
-                if let Some(slot) = self.bodies.get_mut(id) {
-                    *slot = body_state;
+                if let Some(mut slot) = self.bodies.get_mut(id) {
+                    slot.copy_from(&body_state);
                 }
             }
         }
@@ -582,12 +638,12 @@ impl PhysicsWorld {
 
         let mut ids = Vec::with_capacity(island.bodies.len());
         let mut bodies = Vec::with_capacity(island.bodies.len());
-        let mut id_map = HashMap::with_capacity(island.bodies.len());
+        let mut id_map = std::collections::HashMap::with_capacity(island.bodies.len());
 
         for (idx, body_id) in island.bodies.iter().enumerate() {
             if let Some(body) = self.bodies.get(*body_id) {
                 ids.push(*body_id);
-                bodies.push(body.clone());
+                bodies.push(body.to_rigid_body());
                 id_map.insert(*body_id, idx);
             }
         }
@@ -604,15 +660,12 @@ impl PhysicsWorld {
             joints: island.joints.clone(),
         })
     }
-    */
 }
 
-/*
 struct IslandJob {
     ids: Vec<EntityId>,
     bodies: Vec<RigidBody>,
-    id_map: HashMap<EntityId, usize>,
+    id_map: std::collections::HashMap<EntityId, usize>,
     contacts: Vec<Contact>,
     joints: Vec<Joint>,
 }
-*/

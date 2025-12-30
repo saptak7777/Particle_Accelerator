@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "particle_accelerator"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "approx",
  "ash",

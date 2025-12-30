@@ -192,14 +192,18 @@ pub fn gjk_batch(
     for i in (chunk_count * 4)..shapes_a.len() {
         // Fallback to scalar GJK
         use crate::collision::narrowphase::GJKAlgorithm;
-        results.push(GJKAlgorithm::intersect(
-            shapes_a[i],
-            &transforms_a[i],
-            shapes_b[i],
-            &transforms_b[i],
-            EntityId::default(),
-            EntityId::default(),
-        ));
+        results.push(
+            GJKAlgorithm::intersect(
+                shapes_a[i],
+                &transforms_a[i],
+                shapes_b[i],
+                &transforms_b[i],
+                EntityId::default(),
+                EntityId::default(),
+                None,
+            )
+            .map(|(c, _)| c),
+        );
     }
 
     results
@@ -241,7 +245,9 @@ fn gjk_step_x4(
             &trans_b[0],
             EntityId::default(),
             EntityId::default(),
-        ),
+            None,
+        )
+        .map(|(c, _)| c),
         crate::collision::narrowphase::GJKAlgorithm::intersect(
             shapes_a[1],
             &trans_a[1],
@@ -249,7 +255,9 @@ fn gjk_step_x4(
             &trans_b[1],
             EntityId::default(),
             EntityId::default(),
-        ),
+            None,
+        )
+        .map(|(c, _)| c),
         crate::collision::narrowphase::GJKAlgorithm::intersect(
             shapes_a[2],
             &trans_a[2],
@@ -257,7 +265,9 @@ fn gjk_step_x4(
             &trans_b[2],
             EntityId::default(),
             EntityId::default(),
-        ),
+            None,
+        )
+        .map(|(c, _)| c),
         crate::collision::narrowphase::GJKAlgorithm::intersect(
             shapes_a[3],
             &trans_a[3],
@@ -265,7 +275,9 @@ fn gjk_step_x4(
             &trans_b[3],
             EntityId::default(),
             EntityId::default(),
-        ),
+            None,
+        )
+        .map(|(c, _)| c),
     ]
 }
 

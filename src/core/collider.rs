@@ -47,6 +47,12 @@ impl Default for CollisionFilter {
     }
 }
 
+impl Default for Collider {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 /// Collider component referencing a rigid body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Collider {

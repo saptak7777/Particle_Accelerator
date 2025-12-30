@@ -18,7 +18,6 @@ fn bodies_fall_under_gravity() {
         .y;
     assert!(
         position_y < 10.0,
-        "body should start falling, y = {}",
-        position_y
+        "body should start falling, y = {position_y}"
     );
 }

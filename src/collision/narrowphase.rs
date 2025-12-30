@@ -26,19 +26,32 @@ impl GJKAlgorithm {
         transform_b: &Transform,
         body_a: EntityId,
         body_b: EntityId,
-    ) -> Option<Contact> {
-        let mut simplex: Vec<Vec3> = Vec::new();
-        let mut direction = transform_b.position - transform_a.position;
-        if direction.length_squared() < Self::EPSILON {
-            direction = Vec3::X;
-        }
+        initial_simplex: Option<&[Vec3]>,
+    ) -> Option<(Contact, Vec<Vec3>)> {
+        let mut simplex: Vec<Vec3> = if let Some(cached) = initial_simplex {
+            cached.to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let mut direction = if simplex.is_empty() {
+            let mut d = transform_b.position - transform_a.position;
+            if d.length_squared() < Self::EPSILON {
+                d = Vec3::X;
+            }
+            d
+        } else {
+            // If we have a cached simplex, we need a direction to start with.
+            // Often, a good direction is from the last found normal or center-to-center.
+            transform_b.position - transform_a.position
+        };
 
         for _ in 0..Self::MAX_ITERATIONS {
             let support_a = Self::support(shape_a, transform_a, direction);
             let support_b = Self::support(shape_b, transform_b, -direction);
             let point = support_a - support_b;
 
-            if point.dot(direction) < 0.0 {
+            if point.dot(direction) < -1e-6 {
                 return None;
             }
 
@@ -91,7 +104,7 @@ impl GJKAlgorithm {
                     material: MaterialPairProperties::default(),
                 };
 
-                return Some(contact);
+                return Some((contact, simplex));
             }
         }
 
@@ -553,22 +566,26 @@ impl NarrowPhase {
         body_a: &RigidBody,
         collider_b: &Collider,
         body_b: &RigidBody,
-    ) -> Option<Contact> {
+        cached_simplex: Option<&[Vec3]>,
+    ) -> Option<(Contact, Vec<Vec3>)> {
         let transform_a = collider_a.world_transform(&body_a.transform);
         let transform_b = collider_b.world_transform(&body_b.transform);
 
-        let contact = match (&collider_a.shape, &collider_b.shape) {
+        let (mut contact, simplex) = match (&collider_a.shape, &collider_b.shape) {
             (
                 ColliderShape::Box { half_extents: he_a },
                 ColliderShape::Box { half_extents: he_b },
-            ) => SATAlgorithm::intersect_boxes(
-                *he_a,
-                &transform_a,
-                *he_b,
-                &transform_b,
-                body_a.id,
-                body_b.id,
-            ),
+            ) => {
+                let c = SATAlgorithm::intersect_boxes(
+                    *he_a,
+                    &transform_a,
+                    *he_b,
+                    &transform_b,
+                    body_a.id,
+                    body_b.id,
+                )?;
+                (c, Vec::new())
+            }
             _ => GJKAlgorithm::intersect(
                 &collider_a.shape,
                 &transform_a,
@@ -576,13 +593,13 @@ impl NarrowPhase {
                 &transform_b,
                 body_a.id,
                 body_b.id,
-            ),
+                cached_simplex,
+            )?,
         };
 
-        let mut unwrapped_contact = contact?;
-        unwrapped_contact.material =
+        contact.material =
             MaterialPairProperties::from_materials(&body_a.material, &body_b.material);
-        Some(unwrapped_contact)
+        Some((contact, simplex))
     }
 }
 
@@ -618,7 +635,8 @@ mod tests {
         let (body_a, collider_a) = make_sphere_body(0, 1.0, Vec3::ZERO);
         let (body_b, collider_b) = make_sphere_body(1, 1.0, Vec3::new(1.5, 0.0, 0.0));
 
-        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b)
+        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b, None)
+            .map(|(c, _)| c)
             .expect("overlapping spheres should collide");
 
         // Depth should be approximately 0.5 (2.0 combined radius - 1.5 distance)
@@ -635,7 +653,8 @@ mod tests {
         let (body_a, collider_a) = make_sphere_body(0, 1.0, Vec3::ZERO);
         let (body_b, collider_b) = make_sphere_body(1, 1.0, Vec3::new(1.5, 0.0, 0.0));
 
-        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b)
+        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b, None)
+            .map(|(c, _)| c)
             .expect("overlapping spheres should collide");
 
         // Normal should point from A to B (along X axis)
@@ -657,7 +676,8 @@ mod tests {
         let (body_a, collider_a) = make_sphere_body(0, 1.0, Vec3::ZERO);
         let (body_b, collider_b) = make_sphere_body(1, 1.0, Vec3::new(0.5, 0.0, 0.0));
 
-        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b)
+        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b, None)
+            .map(|(c, _)| c)
             .expect("deeply overlapping spheres should collide");
 
         // Depth should be approximately 1.5 (2.0 combined radius - 0.5 distance)
@@ -702,7 +722,8 @@ mod tests {
         // Its half-width along X becomes sqrt(2).
         body_a.transform.rotation = Quat::from_rotation_z(45.0f32.to_radians());
 
-        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b)
+        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b, None)
+            .map(|(c, _)| c)
             .expect("rotated boxes should collide");
 
         assert!(contact.depth > 0.0, "depth was {}", contact.depth);
@@ -715,7 +736,8 @@ mod tests {
         let (body_a, collider_a) = make_sphere_body(0, 1.0, Vec3::ZERO);
         let (body_b, collider_b) = make_sphere_body(1, 1.0, Vec3::new(1.8, 0.0, 0.0));
 
-        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b)
+        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b, None)
+            .map(|(c, _)| c)
             .expect("spheres should collide");
 
         // Expected overlap depth: 2.0 - 1.8 = 0.2
@@ -736,7 +758,7 @@ mod tests {
         let (body_a, collider_a) = make_sphere_body(0, 1.0, Vec3::ZERO);
         let (body_b, collider_b) = make_sphere_body(1, 1.0, Vec3::new(3.0, 0.0, 0.0));
 
-        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b);
+        let contact = NarrowPhase::collide(&collider_a, &body_a, &collider_b, &body_b, None);
         assert!(contact.is_none(), "separated spheres should not collide");
     }
 }

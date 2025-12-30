@@ -293,6 +293,23 @@ impl<'a> BodyProxyMut<'a> {
 
         body
     }
+
+    pub fn copy_from(&mut self, other: &RigidBody) {
+        *self.transform = other.transform;
+        *self.velocity = other.velocity;
+        *self.acceleration = other.acceleration;
+        *self.inverse_mass = other.inverse_mass;
+        *self.inverse_inertia = other.inverse_inertia;
+        *self.mass_properties = other.mass_properties;
+        *self.material = other.material;
+        self.flags.is_static = other.is_static;
+        self.flags.is_kinematic = other.is_kinematic;
+        self.flags.is_awake = other.is_awake;
+        self.flags.is_enabled = other.is_enabled;
+        *self.gravity_scale = other.gravity_scale;
+        *self.linear_damping = other.linear_velocity_damping;
+        *self.angular_damping = other.angular_velocity_damping;
+    }
 }
 
 pub struct SoAIterMut<'a> {

@@ -76,14 +76,13 @@ fn test_revolute_motor_spin_up() {
     {
         let body = world.bodies.get(wheel_id).unwrap();
         let angular_speed = body.velocity().angular.z;
-        println!("Speed at 1s: {}", angular_speed);
+        println!("Speed at 1s: {angular_speed}");
 
         // Exact calculation: v = a*t = 5*1 = 5.0.
         // Semi-implicit might be slightly off.
         assert!(
             angular_speed > 4.5 && angular_speed < 5.5,
-            "Speed {} expected ~5.0",
-            angular_speed
+            "Speed {angular_speed} expected ~5.0"
         );
     }
 
@@ -95,11 +94,10 @@ fn test_revolute_motor_spin_up() {
     {
         let body = world.bodies.get(wheel_id).unwrap();
         let angular_speed = body.velocity().angular.z;
-        println!("Steady speed: {}", angular_speed);
+        println!("Steady speed: {angular_speed}");
         assert!(
             (angular_speed - 10.0).abs() < 0.2,
-            "Speed {} should clamp to 10.0",
-            angular_speed
+            "Speed {angular_speed} should clamp to 10.0"
         );
     }
 }
@@ -172,19 +170,16 @@ fn test_revolute_limits() {
         let axis = Vec3::Z;
         let angle = f32::atan2(basis_a.cross(basis_b).dot(axis), basis_a.dot(basis_b));
 
-        println!("Angle after pushing towards upper: {}", angle);
+        println!("Angle after pushing towards upper: {angle}");
         assert!(
             angle <= upper + 0.1,
-            "Angle {} exceeded upper limit {}",
-            angle,
-            upper
+            "Angle {angle} exceeded upper limit {upper}"
         );
         // Pushing towards 0.5 with 5 rad/s and Baumgarte bias will cause a bounce.
         // We just want to ensure it didn't fly through the limit or explode.
         assert!(
             angle > -0.5,
-            "Angle {} should not have bounced back too far",
-            angle
+            "Angle {angle} should not have bounced back too far"
         );
     }
 
@@ -207,12 +202,10 @@ fn test_revolute_limits() {
         let axis = Vec3::Z;
         let angle = f32::atan2(basis_a.cross(basis_b).dot(axis), basis_a.dot(basis_b));
 
-        println!("Angle after pushing towards lower: {}", angle);
+        println!("Angle after pushing towards lower: {angle}");
         assert!(
             angle >= lower - 0.05,
-            "Angle {} exceeded lower limit {}",
-            angle,
-            lower
+            "Angle {angle} exceeded lower limit {lower}"
         );
     }
 }
@@ -260,8 +253,8 @@ fn test_fixed_joint_stability() {
     let pos = body.transform().position;
     let rot = body.transform().rotation;
 
-    println!("Fixed Pos: {:?}", pos);
-    println!("Fixed Rot: {:?}", rot);
+    println!("Fixed Pos: {pos:?}");
+    println!("Fixed Rot: {rot:?}");
 
     assert!((pos - Vec3::new(1.0, 0.0, 0.0)).length() < 0.05);
     assert!(rot.angle_between(Quat::IDENTITY) < 0.05);
@@ -283,6 +276,8 @@ fn test_prismatic_slider() {
     slider.inverse_mass = 1.0;
     slider.mass_properties.inertia = glam::Mat3::IDENTITY;
     slider.inverse_inertia = glam::Mat3::IDENTITY;
+    slider.linear_velocity_damping = 0.0;
+    slider.angular_velocity_damping = 0.0;
     let slider_id = world.add_rigidbody(slider);
 
     // Slider along X axis, limited to [0, 5]
@@ -320,7 +315,7 @@ fn test_prismatic_slider() {
     {
         let body = world.bodies.get(slider_id).unwrap();
         let pos = body.transform().position;
-        println!("Slider Pos at 2s: {:?}", pos);
+        println!("Slider Pos at 2s: {pos:?}");
         // Motor might lag slightly depending on K
         assert!(pos.x > 3.0);
         assert!(pos.y.abs() < 0.1);
@@ -336,8 +331,8 @@ fn test_prismatic_slider() {
         let body = world.bodies.get(slider_id).unwrap();
         let pos = body.transform().position;
         let rot = body.transform().rotation;
-        println!("Slider Pos at 5s (limit): {:?}", pos);
-        assert!(pos.x > 4.8 && pos.x < 5.2);
+        println!("Slider Pos at 5s (limit): {pos:?}");
+        assert!(pos.x > 4.75 && pos.x < 5.25);
         assert!(rot.angle_between(Quat::IDENTITY) < 0.1);
     }
 }

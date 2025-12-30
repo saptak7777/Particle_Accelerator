@@ -71,19 +71,11 @@ impl CCDDetector {
         let (relative_velocity, relative_speed) =
             relative_velocity_and_speed(body_a, body_b, collider_a, collider_b, dt);
 
-        relative_velocity_and_speed(body_a, body_b, collider_a, collider_b, dt);
-
         if relative_speed < self.ccd_threshold {
             return None;
         }
 
-        // Rewind bodies to start of frame for CCD check
-        let mut start_a = body_a.clone();
-        start_a.transform.position -= start_a.velocity.linear * dt;
-
-        let mut start_b = body_b.clone();
-        start_b.transform.position -= start_b.velocity.linear * dt;
-
+        // Bodies are at t=0 (Start of Frame)
         let toi = self.compute_time_of_impact(
             body_a,
             collider_a,
@@ -93,11 +85,7 @@ impl CCDDetector {
             relative_velocity,
         )?;
 
-        // println!("DEBUG: CCD Hit Detected! TOI: {:.4}", toi);
-
         // Use NarrowPhase to get a high-quality contact at the TOI.
-        // If NarrowPhase fails to find a contact at the exact TOI (due to numerical precision),
-        // we use the fallback logic.
         let contact = self
             .sample_contact(body_a, collider_a, body_b, collider_b, toi)
             .unwrap_or_else(|| {
@@ -110,7 +98,6 @@ impl CCDDetector {
                     relative_velocity,
                 )
             });
-        // println!("DEBUG: CCD Contact Normal: {:?}", contact.normal);
 
         Some(CCDResult {
             contact,
@@ -195,43 +182,112 @@ impl CCDDetector {
         body_b: &RigidBody,
         collider_b: &Collider,
         dt: f32,
-        _relative_velocity: Vec3,
+        relative_velocity: Vec3,
     ) -> Option<f32> {
         if !self.enabled || self.max_toi_iterations == 0 {
             return None;
         }
 
-        // Get geometry centers accounting for collider offsets (handles both simple and compound shapes)
-        let geom_center_a = collider_a.world_transform(&body_a.transform).position;
-        let geom_center_b = collider_b.world_transform(&body_b.transform).position;
-
-        let relative_position = geom_center_b - geom_center_a;
-        let relative_velocity = body_b.velocity.linear - body_a.velocity.linear;
-
-        // Quick check: are they moving toward each other?
-        let closing_speed = relative_velocity.dot(relative_position.normalize_or_zero());
-        if closing_speed > -0.001 {
-            return None; // Moving apart or stationary
+        let relative_speed = relative_velocity.length();
+        if relative_speed < 1e-6 {
+            // Static or near-static - check current state
+            return if self
+                .sample_contact(body_a, collider_a, body_b, collider_b, 0.0)
+                .is_some()
+            {
+                Some(0.0)
+            } else {
+                None
+            };
         }
 
-        // Check if already overlapping
-        let distance = relative_position.length();
-        let combined_radius = collider_a.bounding_radius() + collider_b.bounding_radius();
+        // SAT-based TOI (FAST PATH)
+        let dir = relative_velocity.normalize_or_zero();
+        if dir == Vec3::ZERO {
+            return None;
+        }
 
-        if distance < combined_radius {
+        let gap_0 = self.compute_gap_along_axis(collider_a, body_a, collider_b, body_b, dir);
+
+        if gap_0 < 0.0 {
             return Some(0.0); // Already colliding
         }
 
-        // Compute time of impact
-        let relative_speed = relative_velocity.length();
-        if relative_speed < 0.001 {
-            return None; // No relative motion
+        let toi_approx = gap_0 / relative_speed;
+
+        if toi_approx < 0.0 || toi_approx > dt {
+            return None; // No collision this frame
         }
 
-        let gap = distance - combined_radius;
-        let toi = (gap / closing_speed.abs()).min(dt);
+        // SAFETY NET: Bisect for uncertain cases or small gaps
+        let combined_radius = collider_a.bounding_radius() + collider_b.bounding_radius();
+        if gap_0 < combined_radius * 0.5 {
+            let t_refined = self.bisect_toi_refined(
+                collider_a,
+                body_a,
+                collider_b,
+                body_b,
+                0.0..toi_approx.min(dt),
+                4,
+            );
+            return if t_refined <= dt {
+                Some(t_refined)
+            } else {
+                None
+            };
+        }
 
-        Some(toi)
+        Some(toi_approx)
+    }
+
+    fn compute_gap_along_axis(
+        &self,
+        collider_a: &Collider,
+        body_a: &RigidBody,
+        collider_b: &Collider,
+        body_b: &RigidBody,
+        axis: Vec3,
+    ) -> f32 {
+        let (_a_min, a_max) = self.project_collider(collider_a, body_a, axis);
+        let (b_min, _b_max) = self.project_collider(collider_b, body_b, axis);
+
+        let a_pos_proj = body_a.transform.position.dot(axis);
+        let b_pos_proj = body_b.transform.position.dot(axis);
+
+        // Gap = distance between extents along the axis
+        // Assuming axis points from A towards B (as per relative velocity a - b)
+        // A's max extent: a_pos_proj + a_max
+        // B's min extent: b_pos_proj + b_min
+        (b_pos_proj + b_min) - (a_pos_proj + a_max)
+    }
+
+    fn project_collider(&self, collider: &Collider, body: &RigidBody, axis: Vec3) -> (f32, f32) {
+        let radius = support_radius(collider, body, axis);
+        (-radius, radius)
+    }
+
+    fn bisect_toi_refined(
+        &self,
+        collider_a: &Collider,
+        body_a: &RigidBody,
+        collider_b: &Collider,
+        body_b: &RigidBody,
+        time_range: std::ops::Range<f32>,
+        iterations: usize,
+    ) -> f32 {
+        let (mut t_lo, mut t_hi) = (time_range.start, time_range.end);
+        for _ in 0..iterations {
+            let t_mid = (t_lo + t_hi) * 0.5;
+            if self
+                .sample_contact(body_a, collider_a, body_b, collider_b, t_mid)
+                .is_some()
+            {
+                t_hi = t_mid;
+            } else {
+                t_lo = t_mid;
+            }
+        }
+        t_hi
     }
 
     #[allow(dead_code)]
@@ -273,7 +329,7 @@ impl CCDDetector {
     ) -> Option<Contact> {
         let sample_a = integrate_body_state(body_a, time);
         let sample_b = integrate_body_state(body_b, time);
-        NarrowPhase::collide(collider_a, &sample_a, collider_b, &sample_b)
+        NarrowPhase::collide(collider_a, &sample_a, collider_b, &sample_b, None).map(|(c, _)| c)
     }
 
     fn build_fallback_contact(
@@ -410,91 +466,6 @@ impl CCDDetector {
 
         // Fallback to center-center
         (body_b.transform.position - body_a.transform.position).normalize_or_zero()
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::CCDDetector;
-    use crate::{
-        core::{
-            collider::{Collider, ColliderShape, CollisionFilter},
-            rigidbody::RigidBody,
-            types::Transform,
-        },
-        utils::allocator::EntityId,
-    };
-    use glam::Vec3;
-
-    fn make_sphere(id: u32, radius: f32, position: Vec3, velocity: Vec3) -> (RigidBody, Collider) {
-        let mut body = RigidBody::new(EntityId::from_index(id));
-        body.transform.position = position;
-        body.velocity.linear = velocity;
-
-        let collider = Collider {
-            id: EntityId::from_index(id + 100),
-            rigidbody_id: body.id,
-            shape: ColliderShape::Sphere { radius },
-            offset: Transform::default(),
-            is_trigger: false,
-            collision_filter: CollisionFilter::default(),
-        };
-
-        (body, collider)
-    }
-
-    #[test]
-    fn detects_swept_sphere_hit() {
-        let detector = CCDDetector::new();
-        let (body_a, collider_a) = make_sphere(0, 0.5, Vec3::ZERO, Vec3::ZERO);
-        let (mut body_b, collider_b) =
-            make_sphere(1, 0.5, Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, -20.0));
-        body_b.is_static = false;
-
-        let hit = detector
-            .detect_ccd(&body_a, &collider_a, &body_b, &collider_b, 0.5)
-            .expect("swept spheres should collide");
-
-        assert!(hit.contact.point.z > 0.0);
-        assert!(hit.contact.point.z < 5.0);
-        assert!(hit.time_of_impact < 0.5);
-    }
-
-    #[test]
-    fn handles_compound_offset_geometry() {
-        let detector = CCDDetector::new();
-        let mut body_a = RigidBody::new(EntityId::from_index(10));
-        body_a.transform.position = Vec3::ZERO;
-        let compound = Collider {
-            id: EntityId::from_index(11),
-            rigidbody_id: body_a.id,
-            shape: ColliderShape::Compound {
-                shapes: vec![(
-                    Transform::from_position(Vec3::new(0.0, 0.0, 1.0)),
-                    ColliderShape::Sphere { radius: 0.5 },
-                )],
-            },
-            offset: Transform::default(),
-            is_trigger: false,
-            collision_filter: CollisionFilter::default(),
-        };
-
-        let (mut body_b, collider_b) = make_sphere(
-            2,
-            0.25,
-            Vec3::new(0.0, 0.0, 5.0),
-            Vec3::new(0.0, 0.0, -30.0),
-        );
-        body_b.is_static = false;
-
-        let hit = detector
-            .detect_ccd(&body_a, &compound, &body_b, &collider_b, 0.2)
-            .expect("compound offset sphere should be detected");
-
-        assert!(
-            hit.contact.point.z > 0.5,
-            "contact point should respect compound offset"
-        );
-        assert!(hit.time_of_impact < 0.2);
     }
 }
 
@@ -690,10 +661,95 @@ fn relative_velocity_and_speed(
     collider_b: &Collider,
     dt: f32,
 ) -> (Vec3, f32) {
-    let linear = body_b.velocity.linear - body_a.velocity.linear;
+    let linear = body_a.velocity.linear - body_b.velocity.linear;
     let ang_a = body_a.velocity.angular.length() * collider_a.bounding_radius();
     let ang_b = body_b.velocity.angular.length() * collider_b.bounding_radius();
     let angular_effect = (ang_a + ang_b) * dt;
     let speed = (linear.length_squared() + angular_effect * angular_effect).sqrt();
     (linear, speed)
+}
+#[cfg(test)]
+mod tests {
+    use super::CCDDetector;
+    use crate::{
+        core::{
+            collider::{Collider, ColliderShape, CollisionFilter},
+            rigidbody::RigidBody,
+            types::Transform,
+        },
+        utils::allocator::EntityId,
+    };
+    use glam::Vec3;
+
+    fn make_sphere(id: u32, radius: f32, position: Vec3, velocity: Vec3) -> (RigidBody, Collider) {
+        let mut body = RigidBody::new(EntityId::from_index(id));
+        body.transform.position = position;
+        body.velocity.linear = velocity;
+
+        let collider = Collider {
+            id: EntityId::from_index(id + 100),
+            rigidbody_id: body.id,
+            shape: ColliderShape::Sphere { radius },
+            offset: Transform::default(),
+            is_trigger: false,
+            collision_filter: CollisionFilter::default(),
+        };
+
+        (body, collider)
+    }
+
+    #[test]
+    fn detects_swept_sphere_hit() {
+        let detector = CCDDetector::new();
+        let (body_a, collider_a) = make_sphere(0, 0.5, Vec3::ZERO, Vec3::ZERO);
+        let (mut body_b, collider_b) =
+            make_sphere(1, 0.5, Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, -20.0));
+        body_b.is_static = false;
+
+        let hit = detector
+            .detect_ccd(&body_a, &collider_a, &body_b, &collider_b, 0.5)
+            .expect("swept spheres should collide");
+
+        assert!(hit.contact.point.z > 0.0);
+        assert!(hit.contact.point.z < 5.0);
+        assert!(hit.time_of_impact < 0.5);
+    }
+
+    #[test]
+    fn handles_compound_offset_geometry() {
+        let detector = CCDDetector::new();
+        let mut body_a = RigidBody::new(EntityId::from_index(10));
+        body_a.transform.position = Vec3::ZERO;
+        let compound = Collider {
+            id: EntityId::from_index(11),
+            rigidbody_id: body_a.id,
+            shape: ColliderShape::Compound {
+                shapes: vec![(
+                    Transform::from_position(Vec3::new(0.0, 0.0, 1.0)),
+                    ColliderShape::Sphere { radius: 0.5 },
+                )],
+            },
+            offset: Transform::default(),
+            is_trigger: false,
+            collision_filter: CollisionFilter::default(),
+        };
+
+        let (mut body_b, collider_b) = make_sphere(
+            2,
+            0.25,
+            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, -30.0),
+        );
+        body_b.is_static = false;
+
+        let hit = detector
+            .detect_ccd(&body_a, &compound, &body_b, &collider_b, 0.2)
+            .expect("compound offset sphere should be detected");
+
+        assert!(
+            hit.contact.point.z > 0.5,
+            "contact point should respect compound offset"
+        );
+        assert!(hit.time_of_impact < 0.2);
+    }
 }

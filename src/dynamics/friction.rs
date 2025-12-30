@@ -1,6 +1,9 @@
 use glam::Vec3;
 
-use crate::{core::soa::BodyMut, dynamics::solver::Contact};
+use crate::{
+    core::{rigidbody::RigidBody, soa::BodyMut},
+    dynamics::solver::Contact,
+};
 
 /// Model for anisotropic friction (different coefficients along different axes).
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +32,44 @@ pub fn apply_friction(
     apply_tangential_friction(body_a, body_b, contact, normal_impulse);
     apply_rolling_friction(body_a, body_b, contact, normal_impulse);
     apply_torsional_friction(body_a, body_b, contact, normal_impulse);
+}
+
+pub fn apply_friction_slice(
+    body_a: &mut RigidBody,
+    body_b: &mut RigidBody,
+    contact: &Contact,
+    normal_impulse: f32,
+) {
+    if body_a.is_static && body_b.is_static {
+        return;
+    }
+
+    let r_a = contact.point - body_a.transform.position;
+    let r_b = contact.point - body_b.transform.position;
+
+    let v_a = body_a.velocity.linear + body_a.velocity.angular.cross(r_a);
+    let v_b = body_b.velocity.linear + body_b.velocity.angular.cross(r_b);
+    let relative_vel = v_b - v_a;
+
+    let tangent_vel = relative_vel - contact.normal * relative_vel.dot(contact.normal);
+
+    if tangent_vel.length_squared() > f32::EPSILON {
+        let tangent = tangent_vel.normalize();
+
+        let material_pair =
+            crate::core::types::Material::combine_pair(&body_a.material, &body_b.material);
+        let mu_static =
+            friction_coefficient(material_pair.static_friction, contact.normal, tangent);
+        let max_friction = mu_static * normal_impulse;
+
+        let impulse_mag =
+            -tangent_vel.dot(tangent) / (body_a.inverse_mass + body_b.inverse_mass + 1e-6);
+        let impulse_mag = impulse_mag.clamp(-max_friction, max_friction);
+
+        let impulse = tangent * impulse_mag;
+        body_a.apply_impulse(-impulse, contact.point);
+        body_b.apply_impulse(impulse, contact.point);
+    }
 }
 
 fn apply_tangential_friction(

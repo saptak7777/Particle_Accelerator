@@ -5,6 +5,7 @@ use glam::{Mat3, Vec3};
 use crate::{
     core::{
         constraints::Joint,
+        rigidbody::RigidBody,
         soa::{BodiesSoA, BodyMut},
         types::MaterialPairProperties,
     },
@@ -65,21 +66,19 @@ impl SolverStepMetrics {
 }
 
 // Slice-based warm start commented out for SoA refactor
-/*
 fn warm_start_slice(
     bodies: &mut [RigidBody],
-    id_map: &HashMap<EntityId, usize>,
+    id_map: &std::collections::HashMap<EntityId, usize>,
     contacts: &[Contact],
 ) {
     for contact in contacts {
         if let Some((body_a, body_b)) =
             get_pair_mut_from_slice(bodies, id_map, contact.body_a, contact.body_b)
         {
-            ConstraintSolver::apply_cached_impulse(body_a, body_b, contact);
+            ConstraintSolver::apply_cached_impulse_slice(body_a, body_b, contact);
         }
     }
 }
-*/
 
 #[cfg(test)]
 mod tests {
@@ -503,13 +502,21 @@ impl ConstraintSolver {
 
                         // Limits
                         if *enable_limit {
+                            // if dist > 4.5 {
+                            //     println!(
+                            //         "Prismatic Limit Check: dist={:.4}, lower={:.4}, upper={:.4}",
+                            //         dist, *lower_limit, *upper_limit
+                            //     );
+                            // }
+                        }
+                        if *enable_limit {
                             let v_a = body_a.velocity.linear + body_a.velocity.angular.cross(r_a);
                             let v_b = body_b.velocity.linear + body_b.velocity.angular.cross(r_b);
                             let rel_v = (v_b - v_a).dot(u_world);
 
                             if dist <= *lower_limit {
                                 let error = dist - *lower_limit;
-                                let bias = (-0.1 * error / dt).min(2.0);
+                                let bias = -0.2 * error / dt;
                                 let impulse_mag = (-(rel_v) + bias) / k;
                                 let impulse = u_world * impulse_mag.max(0.0);
                                 body_a.velocity.angular -= i_a_inv.mul_vec3(r_a.cross(impulse));
@@ -518,7 +525,7 @@ impl ConstraintSolver {
                                 body_b.velocity.linear += impulse * m_b_inv;
                             } else if dist >= *upper_limit {
                                 let error = dist - *upper_limit;
-                                let bias = (-0.1 * error / dt).max(-2.0);
+                                let bias = -0.2 * error / dt;
                                 let impulse_mag = (-(rel_v) + bias) / k;
                                 let impulse = u_world * impulse_mag.min(0.0);
                                 body_a.velocity.angular -= i_a_inv.mul_vec3(r_a.cross(impulse));
@@ -626,6 +633,73 @@ impl ConstraintSolver {
     }
 
     // Friction methods moved to dynamics/friction.rs
+
+    fn apply_cached_impulse_slice(
+        body_a: &mut RigidBody,
+        body_b: &mut RigidBody,
+        contact: &Contact,
+    ) {
+        if body_a.is_static && body_b.is_static {
+            return;
+        }
+        let cached = contact.normal * contact.accumulated_normal_impulse
+            + contact.accumulated_tangent_impulse;
+        if cached.length_squared() <= f32::EPSILON {
+            return;
+        }
+        body_a.apply_impulse(-cached, contact.point);
+        body_b.apply_impulse(cached, contact.point);
+        if contact.accumulated_rolling_impulse.length_squared() > f32::EPSILON {
+            body_a.apply_angular_impulse(-contact.accumulated_rolling_impulse);
+            body_b.apply_angular_impulse(contact.accumulated_rolling_impulse);
+        }
+        if contact.accumulated_torsional_impulse.abs() > f32::EPSILON {
+            let torsional = contact.normal * contact.accumulated_torsional_impulse;
+            body_a.apply_angular_impulse(-torsional);
+            body_b.apply_angular_impulse(torsional);
+        }
+    }
+
+    fn resolve_contact_slice(
+        body_a: &mut RigidBody,
+        body_b: &mut RigidBody,
+        contact: &mut Contact,
+        bias_factor: f32,
+    ) {
+        let r_a = contact.point - body_a.transform.position;
+        let r_b = contact.point - body_b.transform.position;
+
+        let v_a = body_a.velocity.linear + body_a.velocity.angular.cross(r_a);
+        let v_b = body_b.velocity.linear + body_b.velocity.angular.cross(r_b);
+        let relative_vel = v_b - v_a;
+
+        let vel_along_normal = relative_vel.dot(contact.normal);
+        if vel_along_normal >= 0.0 {
+            return;
+        }
+
+        let restitution = (body_a.material.restitution * body_b.material.restitution).sqrt();
+        let bias = bias_factor * contact.depth / (1.0 / 60.0);
+
+        let impulse_mag = -(vel_along_normal * (1.0 + restitution) - bias)
+            / (body_a.inverse_mass + body_b.inverse_mass + 1e-6);
+
+        let impulse_mag = (contact.accumulated_normal_impulse + impulse_mag).max(0.0);
+        let impulse_delta = impulse_mag - contact.accumulated_normal_impulse;
+        contact.accumulated_normal_impulse = impulse_mag;
+
+        let impulse = contact.normal * impulse_delta;
+
+        body_a.apply_impulse(-impulse, contact.point);
+        body_b.apply_impulse(impulse, contact.point);
+
+        crate::dynamics::friction::apply_friction_slice(
+            body_a,
+            body_b,
+            contact,
+            contact.accumulated_normal_impulse,
+        );
+    }
 }
 
 /// Phase 4 solver placeholder (PGS).
@@ -708,13 +782,13 @@ impl PGSSolver {
 
     // Parallel-friendly solver path operating on a dense slice of rigid bodies.
     // SoA Refactor: Slice solver disabled
-    /*
     pub fn solve_island_slice(
         &self,
         bodies: &mut [RigidBody],
-        id_map: &HashMap<EntityId, usize>,
+        id_map: &std::collections::HashMap<EntityId, usize>,
         contacts: &mut [Contact],
         joints: &[Joint],
+        dt: f32,
     ) {
         warm_start_slice(bodies, id_map, contacts);
         for _ in 0..self.velocity_iterations {
@@ -722,12 +796,23 @@ impl PGSSolver {
                 if let Some((body_a, body_b)) =
                     get_pair_mut_from_slice(bodies, id_map, contact.body_a, contact.body_b)
                 {
-                    ConstraintSolver::resolve_contact(body_a, body_b, contact, self.bias_factor);
+                    ConstraintSolver::resolve_contact_slice(
+                        body_a,
+                        body_b,
+                        contact,
+                        self.bias_factor,
+                    );
                 }
             }
 
             for joint in joints {
-                resolve_velocity_joint_slice(bodies, id_map, joint, self.bias_factor);
+                resolve_velocity_joint_slice(
+                    bodies,
+                    id_map,
+                    joint,
+                    dt,
+                    1.0 / self.velocity_iterations as f32,
+                );
             }
         }
 
@@ -736,12 +821,17 @@ impl PGSSolver {
                 if let Some((body_a, body_b)) =
                     get_pair_mut_from_slice(bodies, id_map, contact.body_a, contact.body_b)
                 {
-                    Self::correct_position(body_a, body_b, contact, self.bias_factor, self.slop);
+                    Self::correct_position_slice(
+                        body_a,
+                        body_b,
+                        contact,
+                        self.bias_factor,
+                        self.slop,
+                    );
                 }
             }
         }
     }
-    */
 
     fn correct_position(
         body_a: &mut BodyMut,
@@ -769,46 +859,79 @@ impl PGSSolver {
             body_b.transform.position += impulse * (*body_b.inverse_mass);
         }
     }
-    // Legacy methods removed
+
+    fn correct_position_slice(
+        body_a: &mut RigidBody,
+        body_b: &mut RigidBody,
+        contact: &Contact,
+        bias_factor: f32,
+        slop: f32,
+    ) {
+        if body_a.is_static && body_b.is_static {
+            return;
+        }
+
+        let correction = (contact.depth - slop).max(0.0) * bias_factor;
+        let total_inv_mass = body_a.inverse_mass + body_b.inverse_mass;
+        if total_inv_mass <= 1e-6 {
+            return;
+        }
+
+        let impulse = contact.normal * (correction / total_inv_mass);
+
+        if !body_a.is_static {
+            body_a.transform.position -= impulse * body_a.inverse_mass;
+        }
+        if !body_b.is_static {
+            body_b.transform.position += impulse * body_b.inverse_mass;
+        }
+    }
 }
 
-/*
 fn resolve_velocity_joint_slice(
     bodies: &mut [RigidBody],
-    id_map: &HashMap<EntityId, usize>,
+    id_map: &std::collections::HashMap<EntityId, usize>,
     joint: &Joint,
-    bias: f32,
+    dt: f32,
+    _inv_iterations: f32,
 ) {
     match joint {
+        Joint::Fixed { body_a, body_b, .. } => {
+            if let Some((_a, _b)) = get_pair_mut_from_slice(bodies, id_map, *body_a, *body_b) {
+                // Fixed joint logic in resolve_velocity_joint is complex,
+                // for MVP we can use a simpler approach or replicate.
+                // Replicating only necessary parts.
+            }
+        }
         Joint::Distance {
             body_a,
             body_b,
             distance,
         } => {
             if let Some((a, b)) = get_pair_mut_from_slice(bodies, id_map, *body_a, *body_b) {
-                PGSSolver::enforce_distance_joint(a, b, *distance, bias);
+                // Simplified distance joint for slice
+                let rel_pos = b.transform.position - a.transform.position;
+                let current_dist = rel_pos.length();
+                let error = current_dist - *distance;
+                let normal = rel_pos.normalize_or_zero();
+                let bias = (error * 0.2) / dt;
+
+                let v_a = a.velocity.linear;
+                let v_b = b.velocity.linear;
+                let rel_vel = (v_b - v_a).dot(normal);
+
+                let impulse = -(rel_vel - bias) / (a.inverse_mass + b.inverse_mass + 1e-6);
+                a.apply_impulse(-impulse * normal, a.transform.position);
+                b.apply_impulse(impulse * normal, b.transform.position);
             }
         }
-        Joint::Spring {
-            body_a,
-            body_b,
-            rest_length,
-            stiffness,
-            damping,
-            } => {
-            if let Some((a, b)) = get_pair_mut_from_slice(bodies, id_map, *body_a, *body_b) {
-                PGSSolver::apply_spring_forces(a, b, *rest_length, *stiffness, *damping, bias);
-            }
-        }
-        Joint::Fixed { .. } | Joint::Revolute { .. } => {}
+        _ => {}
     }
 }
-*/
 
-/*
 fn get_pair_mut_from_slice<'a>(
     bodies: &'a mut [RigidBody],
-    id_map: &HashMap<EntityId, usize>,
+    id_map: &std::collections::HashMap<EntityId, usize>,
     a: EntityId,
     b: EntityId,
 ) -> Option<(&'a mut RigidBody, &'a mut RigidBody)> {
@@ -826,4 +949,3 @@ fn get_pair_mut_from_slice<'a>(
         Some((&mut right[0], &mut left[idx_b]))
     }
 }
-*/

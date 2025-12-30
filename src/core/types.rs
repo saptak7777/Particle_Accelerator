@@ -219,7 +219,9 @@ impl MixingMode {
             MixingMode::Average => 0.5 * (a + b),
             MixingMode::Min => a.min(b),
             MixingMode::Max => a.max(b),
-            MixingMode::GeometricMean => (a.abs() * b.abs()).sqrt().copysign(0.5 * (a.signum() + b.signum())),
+            MixingMode::GeometricMean => (a.abs() * b.abs())
+                .sqrt()
+                .copysign(0.5 * (a.signum() + b.signum())),
         }
     }
 
@@ -300,15 +302,19 @@ mod tests {
 
     #[test]
     fn material_pair_properties_reflect_anisotropy() {
-        let mut mat_a = Material::default();
-        mat_a.static_friction = 0.8;
-        mat_a.dynamic_friction = 0.6;
-        mat_a.friction_anisotropy = Vec3::new(1.0, 0.8, 1.2);
+        let mat_a = Material {
+            static_friction: 0.8,
+            dynamic_friction: 0.6,
+            friction_anisotropy: Vec3::new(1.0, 0.8, 1.2),
+            ..Default::default()
+        };
 
-        let mut mat_b = Material::default();
-        mat_b.static_friction = 0.4;
-        mat_b.dynamic_friction = 0.2;
-        mat_b.friction_anisotropy = Vec3::splat(1.0);
+        let mat_b = Material {
+            static_friction: 0.4,
+            dynamic_friction: 0.2,
+            friction_anisotropy: Vec3::splat(1.0),
+            ..Default::default()
+        };
 
         let pair = mat_a.combine_with(&mat_b);
 

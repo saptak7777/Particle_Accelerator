@@ -1,11 +1,14 @@
-type ManifoldDebugHook = dyn FnMut(&ManifoldDebugInfo) + Send;
+type ManifoldDebugHook = dyn Fn(&ManifoldDebugInfo) + Send + Sync;
 
 use std::{cmp::Ordering, collections::HashMap, fmt};
 
 use glam::Vec3;
 
 use crate::{
-    collision::clipping::{clip_polygon, rectangle_planes},
+    collision::{
+        clipping::{clip_polygon, rectangle_planes},
+        narrowphase::NarrowPhase,
+    },
     core::{
         collider::{Collider, ColliderShape},
         rigidbody::RigidBody,
@@ -33,6 +36,7 @@ pub struct RawContactPoint {
 pub struct ContactManifold {
     pub normal: Vec3,
     pub points: Vec<RawContactPoint>,
+    pub simplex: Option<Vec<Vec3>>,
 }
 
 impl ContactManifold {
@@ -56,7 +60,8 @@ impl ContactManifold {
             }
         }
 
-        let contact = NarrowPhase::collide(collider_a, body_a, collider_b, body_b)?;
+        let (contact, simplex) =
+            NarrowPhase::collide(collider_a, body_a, collider_b, body_b, None)?;
 
         Some(Self {
             normal: contact.normal,
@@ -65,6 +70,7 @@ impl ContactManifold {
                 depth: contact.depth,
                 feature_id: contact.feature_id,
             }],
+            simplex: Some(simplex),
         })
     }
 }
@@ -115,6 +121,7 @@ pub struct PersistentManifold {
     pub points: Vec<ContactPoint>,
     pub last_frame: u32,
     material: MaterialPairProperties,
+    pub simplex: Option<Vec<Vec3>>,
 }
 
 impl PersistentManifold {
@@ -126,6 +133,7 @@ impl PersistentManifold {
             points: Vec::new(),
             last_frame: 0,
             material: MaterialPairProperties::default(),
+            simplex: None,
         }
     }
 
@@ -136,9 +144,11 @@ impl PersistentManifold {
         body_a: &RigidBody,
         body_b: &RigidBody,
         frame: u32,
+        simplex: Option<Vec<Vec3>>,
     ) {
         self.normal = normal;
         self.last_frame = frame;
+        self.simplex = simplex;
         self.material = Material::combine_pair(&body_a.material, &body_b.material);
 
         let mut updated_points = Vec::with_capacity(raw_points.len());
@@ -319,7 +329,11 @@ fn generate_box_box_manifold(
         return None;
     }
 
-    Some(ContactManifold { normal, points })
+    Some(ContactManifold {
+        normal,
+        points,
+        simplex: None,
+    })
 }
 
 fn feature_id_from_local(body: EntityId, local: Vec3) -> u64 {
@@ -501,7 +515,7 @@ fn select_best_points(
         return points;
     }
 
-    points.sort_by(depth_then_feature);
+    points.sort_unstable_by(depth_then_feature);
     let mut selected: Vec<ContactPoint> = Vec::with_capacity(max_points);
     selected.push(points[0].clone());
 
@@ -544,7 +558,7 @@ fn select_best_points(
         }
     }
 
-    selected.sort_by(depth_then_feature);
+    selected.sort_unstable_by(depth_then_feature);
     selected.truncate(max_points);
     selected
 }
@@ -613,14 +627,37 @@ impl ManifoldCache {
 
     pub fn update_pair(
         &mut self,
-        body_a: EntityId,
-        body_b: EntityId,
-        manifold: ContactManifold,
+        mut manifold: ContactManifold,
+        collider_a: &Collider,
+        collider_b: &Collider,
         rigid_a: &RigidBody,
         rigid_b: &RigidBody,
     ) -> Vec<Contact> {
+        let (body_a, body_b) = (rigid_a.id, rigid_b.id);
         let key = ManifoldKey::new(body_a, body_b);
         let wants_debug = self.debug_hook.is_some();
+
+        // If this manifold doesn't have a simplex yet (e.g. it was just created by generate()),
+        // try to get one from the existing persistent manifold.
+        if manifold.simplex.is_none() {
+            if let Some(entry) = self.manifolds.get(&key) {
+                if let Some((contact, simplex)) = NarrowPhase::collide(
+                    collider_a,
+                    rigid_a,
+                    collider_b,
+                    rigid_b,
+                    entry.simplex.as_deref(),
+                ) {
+                    manifold.normal = contact.normal;
+                    manifold.points = vec![RawContactPoint {
+                        point: contact.point,
+                        depth: contact.depth,
+                        feature_id: contact.feature_id,
+                    }];
+                    manifold.simplex = Some(simplex);
+                }
+            }
+        }
         let (contacts, debug_snapshot) = {
             let entry = self
                 .manifolds
@@ -632,6 +669,7 @@ impl ManifoldCache {
                 rigid_a,
                 rigid_b,
                 self.frame,
+                manifold.simplex,
             );
             let contacts = entry.to_contacts();
             let snapshot = if wants_debug {
@@ -724,7 +762,7 @@ impl ManifoldCache {
 
     pub fn set_debug_hook<F>(&mut self, hook: Option<F>)
     where
-        F: FnMut(&ManifoldDebugInfo) + Send + 'static,
+        F: Fn(&ManifoldDebugInfo) + Send + Sync + 'static,
     {
         self.debug_hook = hook.map(|f| Box::new(f) as Box<_>);
     }
