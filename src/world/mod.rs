@@ -1,4 +1,6 @@
 // use std::collections::HashMap;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 use crate::{
     collision::{
@@ -315,7 +317,10 @@ impl PhysicsWorld {
             {
                 let start = std::time::Instant::now();
                 if self.parallel_enabled {
+                    #[cfg(feature = "parallel")]
                     self.solve_islands_parallel();
+                    #[cfg(not(feature = "parallel"))]
+                    self.solve_islands_sequential();
                 } else {
                     self.solve_islands_sequential();
                 }
@@ -590,9 +595,8 @@ impl PhysicsWorld {
         self.last_solver_metrics = metrics;
     }
 
+    #[cfg(feature = "parallel")]
     fn solve_islands_parallel(&mut self) {
-        use rayon::prelude::*;
-
         let solver = self.dynamics.solver.clone();
         let dt = self.time_step;
 

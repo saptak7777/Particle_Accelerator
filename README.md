@@ -65,11 +65,12 @@ fn setup_body(world: &mut PhysicsWorld) {
     
     let body_id = world.add_rigidbody(body);
 
-    let collider = Collider::builder()
+    let mut collider = Collider::builder()
         .shape(ColliderShape::Sphere { radius: 0.5 })
         .build();
+    collider.rigidbody_id = body_id;
 
-    world.add_collider(body_id, collider);
+    world.add_collider(collider);
 }
 ```
 
@@ -142,6 +143,10 @@ Check if you're using high velocities and if CCD is enabled for that body. If it
 Increase your solver iterations (`velocity_iterations` in `PGSSolver`) or decrease your timestep. Physics is sensitive.
 
 ## Version History
+
+### v0.2.1 (2025-12-30) - The "Audit & Quality" Edition
+- ✅ **Audit Fixes**: Moved `rayon` to an optional `parallel` feature (enabled by default).
+- ✅ **Docs Fix**: Corrected `add_collider` API signature in the README examples.
 
 ### v0.2.0 (2025-12-30) - The "Pre-Integration" Edition
 - ✅ **Pre-Integration CCD**: Restructured the loop to solve CCD *before* integration. No more "time travel" bugs.
